@@ -23,11 +23,11 @@ bot.api_key = API_KEY
 async def on_ready():
     print(f"{bot.user} has connected to Discord! Ready to Pursuit Plats!")
     # Sync slash commands. Run only once per major change - keep commented out for dev
-    try:
+    '''try:
         synced = await bot.tree.sync()
         print(f"Synced {len(synced)} slash commands.")
     except Exception as e:
-        print(f"Failed to sync commands: {e}")
+        print(f"Failed to sync commands: {e}")'''
 
 @bot.tree.command(name='ping', description='Test bot responsiveness.')
 async def ping(interaction: discord.Interaction):

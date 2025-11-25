@@ -2,6 +2,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import aiohttp
+import logging
+
+logger = logging.getLogger('psn_api')
 
 class RegisterCog(commands.Cog):
     def __init__(self, bot):
@@ -11,10 +14,10 @@ class RegisterCog(commands.Cog):
     @app_commands.describe(psn_username='Your PSN username (required)')
     async def register(self, interaction: discord.Interaction, psn_username: str):
         await interaction.response.defer()
-        discord_id = str(interaction.id)
+        discord_id = str(interaction.user.id)
 
         async with aiohttp.ClientSession() as session:
-            headers = {'Authorization': f"Bearer {self.bot.application_id}_{self.bot.api_key}"}
+            headers = {'Authorization': f"Token {self.bot.api_key}"}
             payload = {'discord_id': discord_id, 'psn_username': psn_username}
             async with session.post(f"{self.bot.api_base_url}register/", json=payload, headers=headers) as resp:
                 if resp.status == 200:
@@ -24,6 +27,8 @@ class RegisterCog(commands.Cog):
                     else:
                         await interaction.followup.send(f"Error {data.get('message'), 'Failed to link. Check supplied username and try again later.'}")
                 else:
+                    error_text = await resp.text()
+                    logger.error(f"API error: {resp.status} - {error_text}")
                     await interaction.followup.send('API error. Please try again later or contact an admin.')
 
 async def setup(bot):

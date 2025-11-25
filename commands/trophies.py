@@ -2,6 +2,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import aiohttp
+import logging
+
+logger = logging.getLogger('psn_api')
 
 class TrophiesCog(commands.Cog):
     def __init__(self, bot):
@@ -15,19 +18,22 @@ class TrophiesCog(commands.Cog):
         discord_id = str(target.id)
 
         async with aiohttp.ClientSession() as session:
-            headers = {'Authorization': f"Bearer {self.bot.application_id}_{self.bot.api_key}"}
+            headers = {'Authorization': f"Token {self.bot.api_key}"}
             params = {'discord_id': discord_id}
             async with session.get(f"{self.bot.api_base_url}trophies/", params=params, headers=headers) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     if data.get('linked'):
-                        embed = discord.Embed(title=f"{target.display_name}\'s Trophy Progress", color=0x00ff00)
-                        embed.add_field(name='Total Trophies', value=data['trophies']['total'], inline=True)
-                        embed.add_field(name='Platinum', value=data['trophies']['platinum'], inline=True)
+                        embed = discord.Embed(title=f"{target.display_name} ({data['profile']['display_psn_username']})\'s Trophy Progress", color=0x00ff00)
+                        embed.add_field(name='Total Trophies', value=data['profile']['total_trophies'], inline=True)
+                        embed.add_field(name='Platinum', value=data['profile']['earned_trophy_summary']['platinum'], inline=True)
                         await interaction.followup.send(embed=embed)
                     else:
                         await interaction.followup.send('No PSN linked. User /register first!')
                 else:
+                    error_text = await resp.text()
+                    print(error_text)
+                    logger.error(f"API error: {resp.status} - {error_text}")
                     await interaction.followup.send('API error. Please try again later.')
 
 async def setup(bot):

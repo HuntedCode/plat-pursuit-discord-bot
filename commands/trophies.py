@@ -13,7 +13,7 @@ class TrophiesCog(commands.Cog):
     @app_commands.command(name='trophies', description='View your or another user\'s trophy progress.')
     @app_commands.describe(user='Optional: Mention a user to view their trophies. Leave blank to view your own.')
     async def trophies(self, interaction: discord.Interaction, user: discord.Member = None):
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
         target = user or interaction.user
         discord_id = str(target.id)
 
@@ -27,14 +27,14 @@ class TrophiesCog(commands.Cog):
                         embed = discord.Embed(title=f"{target.display_name} ({data['profile']['display_psn_username']})\'s Trophy Progress", color=0x00ff00)
                         embed.add_field(name='Total Trophies', value=data['profile']['total_trophies'], inline=True)
                         embed.add_field(name='Platinum', value=data['profile']['earned_trophy_summary']['platinum'], inline=True)
-                        await interaction.followup.send(embed=embed)
+                        await interaction.followup.send(embed=embed, ephemeral=True)
                     else:
-                        await interaction.followup.send('No PSN linked. User /register first!')
+                        await interaction.followup.send('No PSN linked. User /register first!', ephemeral=True)
                 else:
                     error_text = await resp.text()
                     print(error_text)
                     logger.error(f"API error: {resp.status} - {error_text}")
-                    await interaction.followup.send('API error. Please try again later.')
+                    await interaction.followup.send('API error. Please try again later.', ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(TrophiesCog(bot))

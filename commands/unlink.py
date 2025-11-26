@@ -36,7 +36,25 @@ class UnlinkCog(commands.Cog):
                 payload = {'discord_id': discord_id}
                 async with session.post(f"{self.bot.api_base_url}unlink/", json=payload, headers=headers) as resp:
                     if resp.status == 200:
-                        await interaction.response.edit_message(content='Unlinked successfully!', embed=None, view=None)
+                        if self.bot.verified_role_id == 0:
+                            logger.warning(f"No VERIFIED_ROLE_ID set. Skipping role assignment for {discord_id}")
+                        else:
+                            try:
+                                role = interaction.guild.get_role(self.bot.verified_role_id)
+                                if role:
+                                    await interaction.user.remove_roles(role)
+                                    logger.info(f"Removed verified role from {discord_id}")
+                                else:
+                                    logger.error(f"Role ID {self.bot.verified_role_id} not found in guild {interaction.guild_id}")
+                            except discord.Forbidden:
+                                logger.error(f"Bot lacks permissions to remove role from {discord_id}")
+                                await interaction.response.edit_message('Unlink succeeded but role removal failed. Contact admin.', ephemeral=True)
+                                return
+                            except Exception as e:
+                                logger.error(f"Role assignment error: {e}")
+                                await interaction.response.edit_message('Unlink succeeded but unexpected error removing role. Contact admin.', ephemeral=True)
+                                return
+                            await interaction.response.edit_message(content='Unlinked successfully!', embed=None, view=None)
                     else:
                         await interaction.response.edit_message(content='Unlink failed. Try again or contact an admin.', embed=None, view=None)
 

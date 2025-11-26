@@ -21,6 +21,7 @@ bot = commands.Bot(command_prefix='__', intents=intents)
 
 bot.api_base_url = API_BASE_URL
 bot.api_key = API_KEY
+bot.verified_role_id = int(os.getenv('VERIFIED_ROLE_ID', 0))
 
 
 @bot.event
@@ -41,7 +42,6 @@ async def main():
     async with bot:
         extensions = [
             'commands.link',
-            'commands.verify',
             'commands.unlink',
             'commands.refresh',
             'commands.trophies',

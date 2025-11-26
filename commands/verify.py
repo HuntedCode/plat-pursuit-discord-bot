@@ -1,3 +1,5 @@
+# No longer in use - encapsulated by the link command
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -22,6 +24,24 @@ class VerifyCog(commands.Cog):
                 if resp.status == 200:
                     data = await resp.json()
                     if data.get('success'):
+                        if self.bot.verified_role_id == 0:
+                            logger.warning(f"No VERIFIED_ROLE_ID set. Skipping role assignment for {discord_id}")
+                        else:
+                            try:
+                                role = interaction.guild.get_role(self.bot.verified_role_id)
+                                if role:
+                                    await interaction.user.add_roles(role)
+                                    logger.info(f"Assigned verified role to {discord_id}")
+                                else:
+                                    logger.error(f"Role ID {self.bot.verified_role_id} not found in guild {interaction.guild_id}")
+                            except discord.Forbidden:
+                                logger.error(f"Bot lacks permissions to assign role to {discord_id}")
+                                await interaction.followup.send('Verification succeeded but role assignment failed. Contact admin.', ephemeral=True)
+                                return
+                            except Exception as e:
+                                logger.error(f"Role assignment error: {e}")
+                                await interaction.followup.send('Verification succeeded but unexpected error assigning role. Contact admin.', ephemeral=True)
+                                return
                         await interaction.followup.send('Success! Your PSN is verified and linked.', ephemeral=True)
                     else:
                         await interaction.followup.send(f"Error: {data.get('message'), 'Verification failed. Check About Me and permissions.'}", ephemeral=True)

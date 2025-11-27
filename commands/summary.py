@@ -36,7 +36,7 @@ class SummaryCog(commands.Cog):
                     data = await resp.json()
                     if data.get('linked'):
                         profile = data['profile']
-                        embed = discord.Embed(title=f"{target.display_name}\'s PSN Profile Summary", color=0xFFD700)
+                        embed = discord.Embed(title=f"{self.bot.plat_pursuit_emoji} {target.display_name}\'s PSN Profile Summary", color=0xFFD700)
                         if profile.get('avatar_url'):
                             embed.set_thumbnail(url=profile['avatar_url'])
                         
@@ -52,7 +52,7 @@ class SummaryCog(commands.Cog):
                         # Trophy Breakdown
                         if profile['psn_history_public']:
                             summary = profile['earned_trophy_summary']
-                            embed.add_field(name='Trophy Breakdown', value=f"🏆 Platinum: {self.format_number(summary.get('platinum', 0))}\n🥇 Gold: {self.format_number(summary.get('gold', 0))}\n🥈 Silver: {self.format_number(summary.get('silver', 0))}\n🥉 Bronze: {self.format_number(summary.get('bronze', 0))}", inline=False)
+                            embed.add_field(name='Trophy Breakdown', value=f"{self.bot.platinum_emoji} Platinum: {self.format_number(summary.get('platinum', 0))}\n{self.bot.gold_emoji} Gold: {self.format_number(summary.get('gold', 0))}\n{self.bot.silver_emoji} Silver: {self.format_number(summary.get('silver', 0))}\n{self.bot.bronze_emoji} Bronze: {self.format_number(summary.get('bronze', 0))}", inline=False)
                             embed.add_field(name='Total Trophies', value=f"**{self.format_number(profile['total_trophies'])}**", inline=True)
                             embed.add_field(name='Games Played', value=self.format_number(profile['total_games']), inline=True)
                         else:
@@ -65,7 +65,7 @@ class SummaryCog(commands.Cog):
 
                         # Recent Platinums
                         platinums = profile['recent_platinums']
-                        platinums_str = "\n".join([f"🏆 {p['name']} ({p['game']}) - {p['earned_date']}" for p in platinums]) or "None yet. Your first plat awaits!"
+                        platinums_str = "\n".join([f"{self.bot.platinum_emoji} {p['name']} ({p['game']}) - {p['earned_date']}" for p in platinums]) or "None yet. Your first plat awaits!"
                         embed.add_field(name='Recent Platinums', value=platinums_str, inline=False)
                         
                         embed.add_field(name="Status", value="Verified" if profile['is_verified'] else "Unverified. Use /link to verify.", inline=False)

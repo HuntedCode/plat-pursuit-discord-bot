@@ -14,6 +14,12 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 API_BASE_URL = os.getenv('API_BASE_URL')
 API_KEY = os.getenv('API_KEY')
 
+PLAT_PURSUIT_EMOJI_ID = os.getenv('PLAT_PURSUIT_EMOJI_ID')
+PLATINUM_EMOJI_ID = os.getenv('PLATINUM_EMOJI_ID')
+GOLD_EMOJI_ID = os.getenv('GOLD_EMOJI_ID')
+SILVER_EMOJI_ID = os.getenv('SILVER_EMOJI_ID')
+BRONZE_EMOJI_ID = os.getenv('BRONZE_EMOJI_ID')
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--sync_commands', action='store_true', help='Global sync bot commands.')
 
@@ -25,6 +31,12 @@ bot = commands.Bot(command_prefix='__', intents=intents)
 bot.api_base_url = API_BASE_URL
 bot.api_key = API_KEY
 bot.verified_role_id = int(os.getenv('VERIFIED_ROLE_ID', 0))
+
+bot.plat_pursuit_emoji = f"<:PlatPursuit:{PLAT_PURSUIT_EMOJI_ID}>" if PLAT_PURSUIT_EMOJI_ID else "🏆"
+bot.platinum_emoji = f"<:Platinum_Trophy:{PLATINUM_EMOJI_ID}>" if PLATINUM_EMOJI_ID else "🏆"
+bot.gold_emoji = f"<:Gold_Trophy:{GOLD_EMOJI_ID}>" if GOLD_EMOJI_ID else "🥇"
+bot.silver_emoji = f"<:Silver_Trophy:{SILVER_EMOJI_ID}>" if SILVER_EMOJI_ID else "🥈"
+bot.bronze_emoji = f"<:Bronze_Trophy:{BRONZE_EMOJI_ID}>" if BRONZE_EMOJI_ID else "🥉"
 
 
 @bot.event

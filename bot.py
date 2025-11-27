@@ -60,6 +60,7 @@ async def main():
             'commands.link',
             'commands.unlink',
             'commands.refresh',
+            'commands.refresh_user',
             'commands.summary',
             ]
         for ext in extensions:

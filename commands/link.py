@@ -64,7 +64,7 @@ class LinkCog(commands.Cog):
                                                     return
                                             await modal_interaction.followup.send('Success! Your PSN is verified and linked.', ephemeral=True)
                                         else:
-                                            await modal_interaction.followup.send(f"Error: {data.get('message'), 'Verification failed. Check About Me and permissions.'}", ephemeral=True)
+                                            await modal_interaction.followup.send(f"Error: {data.get('message', 'Verification failed. Check About Me and permissions.')}", ephemeral=True)
                                     else:
                                         await modal_interaction.followup.send('API error. Please try again later.', ephemeral=True)
                                 

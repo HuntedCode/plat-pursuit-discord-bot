@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 import os
 import asyncio
 import logging
+import argparse
 
 logging.basicConfig(level=logging.INFO)  # Set to DEBUG for verbose dev
 logger = logging.getLogger(__name__)
@@ -12,7 +13,9 @@ load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 API_BASE_URL = os.getenv('API_BASE_URL')
 API_KEY = os.getenv('API_KEY')
-SYNC_COMMANDS = False
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--sync_commands', action='store_true', help='Global sync bot commands.')
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -27,8 +30,9 @@ bot.verified_role_id = int(os.getenv('VERIFIED_ROLE_ID', 0))
 @bot.event
 async def on_ready():
     logger.info(f"{bot.user} has connected to Discord! Ready to Pursue Plats!")
+    args = parser.parse_args()
     try:
-        if SYNC_COMMANDS: 
+        if args.sync_commands: 
             synced = await bot.tree.sync()
             logger.info(f"Synced {len(synced)} slash commands.")
     except Exception as e:
@@ -44,7 +48,7 @@ async def main():
             'commands.link',
             'commands.unlink',
             'commands.refresh',
-            'commands.trophies',
+            'commands.summary',
             ]
         for ext in extensions:
             try:

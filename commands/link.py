@@ -17,7 +17,7 @@ class LinkCog(commands.Cog):
         discord_id = str(interaction.user.id)
         async with aiohttp.ClientSession() as session:
             headers = {'Authorization': f"Token {self.bot.api_key}"}
-            payload = {'psn_username': psn_username, 'discord_id': discord_id}
+            payload = {'psn_username': psn_username.lower(), 'discord_id': discord_id}
             async with session.post(f"{self.bot.api_base_url}generate-code/", json=payload, headers=headers) as resp:
                 if resp.status == 200:
                     data = await resp.json()
@@ -32,47 +32,39 @@ class LinkCog(commands.Cog):
                     view = discord.ui.View(timeout=900)
 
                     async def verify_callback(button_interaction: discord.Interaction):
-                        modal = discord.ui.Modal(title="Confirm PSN Username for Verification")
-                        modal.add_item(discord.ui.TextInput(label='PSN Username', default=psn_username, required=True))
-
-                        async def on_submit(modal_interaction: discord.Interaction):
-                            await modal_interaction.response.defer(ephemeral=True)
-                            input_psn = modal.children[0].value.lower()
-                            async with aiohttp.ClientSession() as session:
-                                verify_payload = {'discord_id': discord_id, 'psn_username': input_psn}
-                                async with session.post(f"{self.bot.api_base_url}verify/", json=verify_payload, headers=headers) as verify_resp:
-                                    if verify_resp.status == 200:
-                                        data = await verify_resp.json()
-                                        if data.get('success'):
-                                            if self.bot.verified_role_id == 0:
-                                                logger.warning(f"No VERIFIED_ROLE_ID set. Skipping role assignment for {discord_id}")
-                                            else:
-                                                try:
-                                                    role = modal_interaction.guild.get_role(self.bot.verified_role_id)
-                                                    if role:
-                                                        await modal_interaction.user.add_roles(role)
-                                                        logger.info(f"Assigned verified role to {discord_id}")
-                                                    else:
-                                                        logger.error(f"Role ID {self.bot.verified_role_id} not found in guild {modal_interaction.guild_id}")
-                                                except discord.Forbidden:
-                                                    logger.error(f"Bot lacks permissions to assign role to {discord_id}")
-                                                    await modal_interaction.followup.send('Verification succeeded but role assignment failed. Contact admin.', ephemeral=True)
-                                                    return
-                                                except Exception as e:
-                                                    logger.error(f"Role assignment error: {e}")
-                                                    await modal_interaction.followup.send('Verification succeeded but unexpected error assigning role. Contact admin.', ephemeral=True)
-                                                    return
-                                            await modal_interaction.followup.send('Success! Your PSN is verified and linked.', ephemeral=True)
+                        await button_interaction.response.defer(ephemeral=True)
+                        verify_payload = {'discord_id': discord_id, 'psn_username': psn_username.lower()}
+                        async with aiohttp.ClientSession() as session:
+                            async with session.post(f"{self.bot.api_base_url}verify/", json=verify_payload, headers=headers) as verify_resp:
+                                if verify_resp.status == 200:
+                                    data = await verify_resp.json()
+                                    if data.get('success'):
+                                        if self.bot.verified_role_id == 0:
+                                            logger.warning(f"No VERIFIED_ROLE_ID set. Skipping role assignment for {discord_id}")
                                         else:
-                                            await modal_interaction.followup.send(f"Error: {data.get('message', 'Verification failed. Check About Me and permissions.')}", ephemeral=True)
+                                            try:
+                                                role = button_interaction.guild.get_role(self.bot.verified_role_id)
+                                                if role:
+                                                    await button_interaction.user.add_roles(role)
+                                                    logger.info(f"Assigned verified role to {discord_id}")
+                                                else:
+                                                    logger.error(f"Role ID {self.bot.verified_role_id} not found in guild {button_interaction.guild_id}")
+                                            except discord.Forbidden:
+                                                logger.error(f"Bot lacks permissions to assign role to {discord_id}")
+                                                await button_interaction.followup.send('Verification succeeded but role assignment failed. Contact admin.', ephemeral=True)
+                                                return
+                                            except Exception as e:
+                                                logger.error(f"Role assignment error: {e}")
+                                                await button_interaction.followup.send('Verification succeeded but unexpected error assigning role. Contact admin.', ephemeral=True)
+                                                return
+                                        await button_interaction.followup.send('Success! Your PSN is verified and linked.', ephemeral=True)
                                     else:
-                                        await modal_interaction.followup.send('API error. Please try again later.', ephemeral=True)
-                                
-                                    original_message = await button_interaction.original_response()
-                                    await original_message.edit(view=None)
-
-                        modal.on_submit = on_submit
-                        await button_interaction.response.send_modal(modal)
+                                        await button_interaction.followup.send(f"Error: {data.get('message', 'Verification failed. Check About Me and permissions.')}", ephemeral=True)
+                                else:
+                                    await button_interaction.followup.send('API error. Please try again later.', ephemeral=True)
+                            
+                                original_message = await button_interaction.original_response()
+                                await original_message.edit(view=None)
 
                     button = discord.ui.Button(label="Verify Now", style=discord.ButtonStyle.primary)
                     button.callback = verify_callback

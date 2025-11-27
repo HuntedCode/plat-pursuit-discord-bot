@@ -31,7 +31,7 @@ class LinkCog(commands.Cog):
 
                     view = discord.ui.View(timeout=900)
 
-                    async def verify_callback(interaction: discord.Interaction):
+                    async def verify_callback(button_interaction: discord.Interaction):
                         modal = discord.ui.Modal(title="Confirm PSN Username for Verification")
                         modal.add_item(discord.ui.TextInput(label='PSN Username', default=psn_username, required=True))
 
@@ -39,7 +39,6 @@ class LinkCog(commands.Cog):
                             await modal_interaction.response.defer(ephemeral=True)
                             input_psn = modal.children[0].value.lower()
                             async with aiohttp.ClientSession() as session:
-                                print("Verify Now button pushed..")
                                 verify_payload = {'discord_id': discord_id, 'psn_username': input_psn}
                                 async with session.post(f"{self.bot.api_base_url}verify/", json=verify_payload, headers=headers) as verify_resp:
                                     if verify_resp.status == 200:
@@ -68,9 +67,12 @@ class LinkCog(commands.Cog):
                                             await modal_interaction.followup.send(f"Error: {data.get('message'), 'Verification failed. Check About Me and permissions.'}", ephemeral=True)
                                     else:
                                         await modal_interaction.followup.send('API error. Please try again later.', ephemeral=True)
+                                
+                                    original_message = await button_interaction.original_response()
+                                    await original_message.edit(view=None)
 
                         modal.on_submit = on_submit
-                        await interaction.response.send_modal(modal)
+                        await button_interaction.response.send_modal(modal)
 
                     button = discord.ui.Button(label="Verify Now", style=discord.ButtonStyle.primary)
                     button.callback = verify_callback

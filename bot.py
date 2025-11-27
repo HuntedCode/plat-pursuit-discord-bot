@@ -25,6 +25,7 @@ parser.add_argument('--sync_commands', action='store_true', help='Global sync bo
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 
 bot = commands.Bot(command_prefix='__', intents=intents)
 
@@ -62,6 +63,8 @@ async def main():
             'commands.refresh',
             'commands.refresh_user',
             'commands.summary',
+
+            'commands.welcome',
             ]
         for ext in extensions:
             try:

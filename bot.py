@@ -63,6 +63,7 @@ async def main():
             'commands.refresh',
             'commands.refresh_user',
             'commands.summary',
+            'commands.trophy_case',
 
             'commands.welcome',
             'commands.member_events',

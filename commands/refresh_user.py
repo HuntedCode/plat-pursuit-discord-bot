@@ -14,13 +14,13 @@ class RefreshUserCog(commands.Cog):
     @app_commands.default_permissions(manage_messages=True)
     @app_commands.describe(user='The user to refresh.')
     async def refresh_user(self, interaction: discord.Interaction, user: discord.Member):
-        await interaction.response.defer()
+        await interaction.response.defer(ephemeral=True)
 
         target_discord_id = str(user.id)
-        async with aiohttp.ClientSession as session:
+        async with aiohttp.ClientSession() as session:
             headers = {'Authorization': f"Token {self.bot.api_key}"}
             payload = {'discord_id': target_discord_id, 'admin_override': True}
-            async with session.post(f"{self.bot.api_base_url}refresh_profile/", json=payload, headers=headers) as resp:
+            async with session.post(f"{self.bot.api_base_url}refresh/", json=payload, headers=headers) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     if data.get('success'):

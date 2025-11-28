@@ -65,6 +65,7 @@ async def main():
             'commands.summary',
 
             'commands.welcome',
+            'commands.member_events',
             ]
         for ext in extensions:
             try:

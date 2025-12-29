@@ -23,7 +23,7 @@ GOLD_EMOJI_ID = os.getenv('GOLD_EMOJI_ID')
 SILVER_EMOJI_ID = os.getenv('SILVER_EMOJI_ID')
 BRONZE_EMOJI_ID = os.getenv('BRONZE_EMOJI_ID')
 
-BOT_API_PORT = int(os.getenv('BOT_API_PORT', 5000))
+BOT_API_PORT = int(os.getenv('PORT', 5000))
 BOT_API_HOST = os.getenv('BOT_API_HOST', '127.0.0.1') # localhost for dev, 0.0.0.0 for prod
 
 parser = argparse.ArgumentParser()

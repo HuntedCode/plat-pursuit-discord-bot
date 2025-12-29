@@ -80,7 +80,7 @@ async def on_ready():
     logger.info(f"{bot.user} has connected to Discord! Ready to Pursue Plats!")
     args = parser.parse_args()
     try:
-        if args.sync_commands: 
+        if True: 
             synced = await bot.tree.sync()
             logger.info(f"Synced {len(synced)} slash commands.")
     except Exception as e:

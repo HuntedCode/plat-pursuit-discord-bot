@@ -68,7 +68,7 @@ class SummaryCog(commands.Cog):
                         platinums_str = "\n".join([f"{self.bot.platinum_emoji} {p['name']} ({p['game']}) - {p['earned_date']}" for p in platinums]) or "None yet. Your first plat awaits!"
                         embed.add_field(name='Recent Platinums', value=platinums_str, inline=False)
                         
-                        embed.add_field(name="Status", value="Verified" if profile['is_verified'] else "Unverified. Use /link to verify.", inline=False)
+                        embed.add_field(name="Status", value="Verified" if profile['is_discord_verified'] else "Unverified. Use /link to verify.", inline=False)
 
                         embed.set_footer(text=f"Last synced: {profile['last_synced']}") 
 

@@ -18,9 +18,9 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 API_BASE_URL = os.getenv('API_BASE_URL')
 API_KEY = os.getenv('API_KEY')
 
-PROXY_URL = os.getenv('DISCORD_PROXY_URL')
-PROXY_USER = os.getenv('DISCORD_PROXY_USER')
-PROXY_PASS = os.getenv('DISCORD_PROXY_PASS')
+PROXY_URL = os.getenv('PROXY_URL')
+PROXY_USER = os.getenv('PROXY_USER')
+PROXY_PASS = os.getenv('PROXY_PASS')
 
 proxy_auth = aiohttp.BasicAuth(PROXY_USER, PROXY_PASS)
 proxy = PROXY_URL

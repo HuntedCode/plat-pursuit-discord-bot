@@ -9,6 +9,8 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 import signal
+from urllib.parse import urlparse
+from aiohttp import BasicAuth, ClientSession
 
 logging.basicConfig(level=logging.INFO)  # Set to DEBUG for verbose dev
 logger = logging.getLogger(__name__)
@@ -76,6 +78,14 @@ BRONZE_EMOJI_ID = os.getenv('BRONZE_EMOJI_ID')
 BOT_API_PORT = int(os.getenv('PORT', 5000))
 BOT_API_HOST = os.getenv('BOT_API_HOST', '127.0.0.1') # localhost for dev, 0.0.0.0 for prod
 
+PROXY_URL = os.getenv('PROXY_URL')
+PROXY = None
+PROXY_AUTH = None
+if PROXY_URL:
+    parsed_proxy = urlparse(PROXY_URL)
+    PROXY = f"{parsed_proxy.scheme}://{parsed_proxy.hostname}:{parsed_proxy.port}"
+    PROXY_AUTH = BasicAuth(parsed_proxy.username, parsed_proxy.password) if parsed_proxy.username and parsed_proxy.password else None
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--sync_commands', action='store_true', help='Global sync bot commands.')
 
@@ -83,7 +93,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix='__', intents=intents)
+bot = commands.Bot(command_prefix='__', intents=intents, proxy=PROXY, proxy_auth=PROXY_AUTH)
 
 bot.api_base_url = API_BASE_URL
 bot.api_key = API_KEY
@@ -165,10 +175,28 @@ def shutdown_handler(signum, frame):
     loop = asyncio.get_running_loop()
     loop.create_task(shutdown())
 
+async def check_proxy_ip():
+    if not PROXY_URL:
+        logger.info("No proxy configured, skipping IP check.")
+        return
+    try:
+        async with ClientSession() as session:
+            async with session.get('https://api.ipify.org?format=text', proxy=PROXY, proxy_auth=PROXY_AUTH, timeout=10) as resp:
+                if resp.status == 200:
+                    ip = (await resp.text()).strip()
+                    logger.info(f"Outbound IP via proxy: {ip}")
+                else:
+                    raise Exception(f"IP check failed with status: {resp.status}")
+    except Exception as e:
+        logger.error(f"Failed to check outbound IP via proxy: {str(e)}")
+        raise
+
 async def main():
     global bot_task, worker_task, server_task, server
     await load_extensions()
     
+    await check_proxy_ip()
+
     bot_task = None
     worker_task = asyncio.create_task(role_assignment_worker())
 

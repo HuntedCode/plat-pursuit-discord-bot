@@ -42,9 +42,9 @@ class VerifyCog(commands.Cog):
                                 logger.error(f"Role assignment error: {e}")
                                 await interaction.followup.send('Verification succeeded but unexpected error assigning role. Contact admin.', ephemeral=True)
                                 return
-                        await interaction.followup.send('Success! Your PSN is verified and linked.', ephemeral=True)
+                        await interaction.followup.send(f"Success! <@{discord_id}>, your PSN has been linked and verified. Enjoy your time in PlatPursuit!", ephemeral=True)
                     else:
-                        await interaction.followup.send(f"Error: {data.get('message'), 'Verification failed. Check About Me and permissions.'}", ephemeral=True)
+                        await interaction.followup.send(f"Error: {data.get('message'), 'Verification failed. Check your "About Me" and account permissions.'}", ephemeral=True)
                 else:
                     await interaction.followup.send('API error. Please try again later.', ephemeral=True)
 

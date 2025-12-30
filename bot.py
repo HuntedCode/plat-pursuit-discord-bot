@@ -8,6 +8,7 @@ import argparse
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
+import signal
 
 logging.basicConfig(level=logging.INFO)  # Set to DEBUG for verbose dev
 logger = logging.getLogger(__name__)
@@ -17,33 +18,48 @@ role_queue = asyncio.Queue()
 async def role_assignment_worker():
     while True:
         data = await role_queue.get()
-        try:
-            user_id = data.get('user_id')
-            role_id = data.get('role_id')
-            guild_id = data.get('guild_id', GUILD_ID)
+        max_retries = 5
+        retry_count = 0
+        while retry_count < max_retries:
+            try:
+                user_id = data.get('user_id')
+                role_id = data.get('role_id')
+                guild_id = data.get('guild_id', GUILD_ID)
 
-            guild = bot.get_guild(guild_id)
-            if not guild:
-                logger.error(f"Guild not found: {guild_id}")
-                continue
+                guild = bot.get_guild(guild_id)
+                if not guild:
+                    logger.error(f"Guild not found: {guild_id}")
+                    continue
 
-            member = guild.get_member(user_id)
-            if not member:
-                logger.error(f"Member not found: {user_id} in guild {guild_id}")
-                continue
+                member = guild.get_member(user_id)
+                if not member:
+                    logger.error(f"Member not found: {user_id} in guild {guild_id}")
+                    continue
 
-            role = guild.get_role(role_id)
-            if not role:
-                logger.error(f"Role not found: {role_id} in guild {guild_id}")
-                continue
-            
-            await member.add_roles(role)
-            logger.info(f"Assigned role {role.name} to {member.name} in guild {guild_id}")
-        except Exception as e:
-            logger.error(f"Error assigning role from queue: {e}")
-        finally:
-            role_queue.task_done()
-        
+                role = guild.get_role(role_id)
+                if not role:
+                    logger.error(f"Role not found: {role_id} in guild {guild_id}")
+                    continue
+                
+                await member.add_roles(role)
+                logger.info(f"Assigned role {role.name} to {member.name} in guild {guild_id}")
+                break
+            except discord.HTTPException as e:
+                if e.status == 429:
+                    retry_after = float(e.response.headers.get('Retry-After', 1))
+                    logger.warning(f"Rate limited (429) on role assignment. Retrying after {retry_after} seconds.")
+                    await asyncio.sleep(retry_after + 0.5)
+                    retry_count += 1
+                else:
+                    logger.error(f"Role assignment failed: {e}")
+            except Exception as e:
+                logger.error(f"Error assigning role from queue: {e}")
+                await asyncio.sleep(1)
+                retry_count += 1
+        if retry_count >= max_retries:
+            logger.error(f"Max retries exceeded for role assignment: {data}. Dropping request.")
+        role_queue.task_done()
+
         await asyncio.sleep(0.5)
 
 load_dotenv()
@@ -130,18 +146,72 @@ async def load_extensions():
         except Exception as e:
             logger.error(f"Error to load extension {ext}: {e}")
 
+bot_task = None
+worker_task = None
+server_task = None
+server = None
+
+async def shutdown():
+    logger.info("Shutting down tasks...")
+    if server_task:
+        server_task.cancel()
+    if bot_task:
+        bot_task.cancel()
+    if worker_task:
+        worker_task.cancel()
+
+def shutdown_handler(signum, frame):
+    logger.info(f"Received signal {signum} - Initiating graceful shutdown")
+    loop = asyncio.get_running_loop()
+    loop.create_task(shutdown())
+
 async def main():
+    global bot_task, worker_task, server_task, server
     await load_extensions()
     
     bot_task = asyncio.create_task(bot.start(TOKEN))
     worker_task = asyncio.create_task(role_assignment_worker())
 
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(sig, lambda s=sig: shutdown_handler(s, None))
+
     config = uvicorn.Config(app=app, host=BOT_API_HOST, port=BOT_API_PORT, log_level='info')
     server = uvicorn.Server(config)
-    await server.serve()
+    
+    server_task = asyncio.create_task(server.serve())
 
-    await bot_task
-    await worker_task
+    logger.info(f"Starting bot and worker...")
+    try:
+        await asyncio.gather(bot_task, worker_task, server_task)
+    except asyncio.CancelledError:
+        logger.info('Tasks cancelled - Shutting down')
+    finally:
+        logger.info("Cleaning up resources...")
+
+        while not role_queue.empty():
+            try:
+                data = await asyncio.wait_for(role_queue.get(), timeout=1.0)
+                role_queue.task_done()
+            except asyncio.TimeoutError:
+                break
+        if worker_task:
+            worker_task.cancel()
+        await asyncio.sleep(0)
+        if bot.is_ready():
+            await bot.close()
+        else:
+            if bot_task:
+                bot_task.cancel()
+        if server:
+            await server.shutdown()
+
+        logger.info('Shutdown complete.')
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info('Keyboard interrupt - Shutting down')
+    except Exception as e:
+        logger.error(f"Unexpected error in main: {e}")

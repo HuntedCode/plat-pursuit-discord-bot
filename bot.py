@@ -169,7 +169,7 @@ async def main():
     global bot_task, worker_task, server_task, server
     await load_extensions()
     
-    bot_task = asyncio.create_task(bot.start(TOKEN))
+    bot_task = None
     worker_task = asyncio.create_task(role_assignment_worker())
 
     loop = asyncio.get_running_loop()
@@ -182,31 +182,55 @@ async def main():
     server_task = asyncio.create_task(server.serve())
 
     logger.info(f"Starting bot and worker...")
-    try:
-        await asyncio.gather(bot_task, worker_task, server_task)
-    except asyncio.CancelledError:
-        logger.info('Tasks cancelled - Shutting down')
-    finally:
-        logger.info("Cleaning up resources...")
 
-        while not role_queue.empty():
+    max_retries = 5
+    retry_delay = 1.0
+    for attempt in range(1, max_retries + 1):
+        try:
             try:
-                data = await asyncio.wait_for(role_queue.get(), timeout=1.0)
-                role_queue.task_done()
-            except asyncio.TimeoutError:
+                bot_task = asyncio.create_task(bot.start(TOKEN))
+                await asyncio.gather(bot_task, worker_task, server_task)
                 break
-        if worker_task:
-            worker_task.cancel()
-        await asyncio.sleep(0)
-        if bot.is_ready():
-            await bot.close()
-        else:
-            if bot_task:
-                bot_task.cancel()
-        if server:
-            await server.shutdown()
+            except discord.HTTPException as e:
+                if e.status == 429 and attempt < max_retries:
+                    retry_after = float(e.response.headers.get('Retry-After', retry_delay))
+                    logger.warning(f"Rate limited (429) on bot startup (attempt {attempt}/{max_retries}). Retrying after {retry_after} seconds.")
+                    await asyncio.sleep(retry_after)
+                    retry_delay *= 2
+                else:
+                    logger.error(f"Bot startup failed after {attempt} attempts: {e}")
+                    raise
+            except Exception as e:
+                logger.error(f"Unexpected error during bot startup (attempt {attempt}/{max_retries}): {e}")
+                if attempt < max_retries:
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2
+                else:
+                    raise
+            
+        except asyncio.CancelledError:
+            logger.info('Tasks cancelled - Shutting down')
+        finally:
+            logger.info("Cleaning up resources...")
 
-        logger.info('Shutdown complete.')
+            while not role_queue.empty():
+                try:
+                    data = await asyncio.wait_for(role_queue.get(), timeout=1.0)
+                    role_queue.task_done()
+                except asyncio.TimeoutError:
+                    break
+            if worker_task:
+                worker_task.cancel()
+            await asyncio.sleep(0)
+            if bot.is_ready():
+                await bot.close()
+            else:
+                if bot_task:
+                    bot_task.cancel()
+            if server:
+                await server.shutdown()
+
+            logger.info('Shutdown complete.')
 
 if __name__ == '__main__':
     try:

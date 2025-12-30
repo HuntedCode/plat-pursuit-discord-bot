@@ -7,55 +7,49 @@ import logging
 import argparse
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from urllib.parse import urlparse
 import uvicorn
-import aiohttp
 
 logging.basicConfig(level=logging.INFO)  # Set to DEBUG for verbose dev
 logger = logging.getLogger(__name__)
+
+role_queue = asyncio.Queue()
+
+async def role_assignment_worker():
+    while True:
+        data = await role_queue.get()
+        try:
+            user_id = data.get('user_id')
+            role_id = data.get('role_id')
+            guild_id = data.get('guild_id', GUILD_ID)
+
+            guild = bot.get_guild(guild_id)
+            if not guild:
+                logger.error(f"Guild not found: {guild_id}")
+                continue
+
+            member = guild.get_member(user_id)
+            if not member:
+                logger.error(f"Member not found: {user_id} in guild {guild_id}")
+                continue
+
+            role = guild.get_role(role_id)
+            if not role:
+                logger.error(f"Role not found: {role_id} in guild {guild_id}")
+                continue
+            
+            await member.add_roles(role)
+            logger.info(f"Assigned role {role.name} to {member.name} in guild {guild_id}")
+        except Exception as e:
+            logger.error(f"Error assigning role from queue: {e}")
+        finally:
+            role_queue.task_done()
+        
+        await asyncio.sleep(0.5)
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 API_BASE_URL = os.getenv('API_BASE_URL')
 API_KEY = os.getenv('API_KEY')
-
-PROXY_URL = os.getenv('PROXY_URL')
-
-def parse_proxy(full_url):
-    if not full_url:
-        return None, None
-    
-    parsed = urlparse(full_url)
-    auth = None
-    if '@' in parsed.netloc:
-        auth_part, host_part = parsed.netloc.split('@', 1)
-        user = auth_part
-        passw = ''
-        if ':' in auth_part:
-            user, passw = auth_part.split(':', 1)
-        try:
-            auth = aiohttp.BasicAuth(user, passw)
-        except ValueError as e:
-            logger.error(f"Invalid proxy auth in {full_url}: {e}")
-            return None, None 
-    else:
-        host_part = parsed.netloc
-    
-    proxy = f"{parsed.scheme}://{host_part}{parsed.path or ''}"
-    return proxy, auth
-
-def get_proxy():
-    if not PROXY_URL:
-        return None, None
-    proxies = [p.strip() for p in PROXY_URL.split(',')]
-    if not proxies:
-        return None, None
-    selected = proxies[0]
-    proxy, auth = parse_proxy(selected)
-    logger.info(f"Using proxy: {proxy or 'None'} (auth: {'enabled' if auth else 'none'})")
-    return proxy, auth
-
-proxy, auth = get_proxy()
 
 PLAT_PURSUIT_EMOJI_ID = os.getenv('PLAT_PURSUIT_EMOJI_ID')
 PLATINUM_EMOJI_ID = os.getenv('PLATINUM_EMOJI_ID')
@@ -73,7 +67,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix='__', intents=intents, proxy=proxy, proxy_auth=auth)
+bot = commands.Bot(command_prefix='__', intents=intents)
 
 bot.api_base_url = API_BASE_URL
 bot.api_key = API_KEY
@@ -95,43 +89,16 @@ async def assign_role(data: dict, credentials: HTTPAuthorizationCredentials = De
     if credentials.credentials != API_KEY:
         raise HTTPException(status_code=401, detail='Invalid API key')
     
-    user_id = data.get('user_id')
-    role_id = data.get('role_id')
-    guild_id = data.get('guild_id', GUILD_ID)
-
-    guild = bot.get_guild(guild_id)
-    if not guild:
-        raise HTTPException(status_code=404, detail='Guild not found')
-
-    member = guild.get_member(user_id)
-    if not member:
-        raise HTTPException(status_code=404, detail="Member not found")
+    if not data.get('user_id') or not data.get('role_id'):
+        raise HTTPException(status_code=400, detail='Missing user_id or role_id')
     
-    role = guild.get_role(role_id)
-    if not role:
-        raise HTTPException(status_code=404, detail='Role not found')
-    
-    await member.add_roles(role)
-    logger.info(f"Assigned role {role.name} to {member.name}")
-    return {'status': 'success', 'message': f"Assigned role {role.name} to {member.name}"}
+    await role_queue.put(data)
+    logger.info(f"Queued role assignment: {data}")
+    return {'status': 'queued', 'message': 'Role assignment queued for processing'}
 
 @bot.event
 async def on_ready():
     logger.info(f"{bot.user} has connected to Discord! Ready to Pursue Plats!")
-    logger.info(f"Checking outbound ip...")
-
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get('https://api.ipify.org?format=json') as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    outbound_ip = data.get('ip', 'Unknown')
-                    logger.info(f"Outbound IP on startup: {outbound_ip}")
-                else:
-                    logger.warning(f"Failed to fetch outbound IP: HTTP {resp.status}")
-    except Exception as e:
-        logger.error(f"Error fetching outbound IP: {e}")
-
     args = parser.parse_args()
     try:
         if args.sync_commands: 
@@ -167,12 +134,14 @@ async def main():
     await load_extensions()
     
     bot_task = asyncio.create_task(bot.start(TOKEN))
+    worker_task = asyncio.create_task(role_assignment_worker())
 
     config = uvicorn.Config(app=app, host=BOT_API_HOST, port=BOT_API_PORT, log_level='info')
     server = uvicorn.Server(config)
     await server.serve()
 
     await bot_task
+    await worker_task
 
 if __name__ == '__main__':
     asyncio.run(main())

@@ -8,6 +8,7 @@ import argparse
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
+import aiohttp
 
 logging.basicConfig(level=logging.INFO)  # Set to DEBUG for verbose dev
 logger = logging.getLogger(__name__)
@@ -16,6 +17,13 @@ load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 API_BASE_URL = os.getenv('API_BASE_URL')
 API_KEY = os.getenv('API_KEY')
+
+PROXY_URL = os.getenv('DISCORD_PROXY_URL')
+PROXY_USER = os.getenv('DISCORD_PROXY_USER')
+PROXY_PASS = os.getenv('DISCORD_PROXY_PASS')
+
+proxy_auth = aiohttp.BasicAuth(PROXY_USER, PROXY_PASS)
+proxy = PROXY_URL
 
 PLAT_PURSUIT_EMOJI_ID = os.getenv('PLAT_PURSUIT_EMOJI_ID')
 PLATINUM_EMOJI_ID = os.getenv('PLATINUM_EMOJI_ID')
@@ -33,7 +41,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix='__', intents=intents)
+bot = commands.Bot(command_prefix='__', intents=intents, proxy=proxy, proxy_auth=proxy_auth)
 
 bot.api_base_url = API_BASE_URL
 bot.api_key = API_KEY
@@ -78,6 +86,20 @@ async def assign_role(data: dict, credentials: HTTPAuthorizationCredentials = De
 @bot.event
 async def on_ready():
     logger.info(f"{bot.user} has connected to Discord! Ready to Pursue Plats!")
+    logger.info(f"Checking outbound ip...")
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get('https://api.ipify.org?format=json') as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    outbound_ip = data.get('ip', 'Unknown')
+                    logger.info(f"Outbound IP on startup: {outbound_ip}")
+                else:
+                    logger.warning(f"Failed to fetch outbound IP: HTTP {resp.status}")
+    except Exception as e:
+        logger.error(f"Error fetching outbound IP: {e}")
+
     args = parser.parse_args()
     try:
         if args.sync_commands: 

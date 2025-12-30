@@ -7,6 +7,7 @@ import logging
 import argparse
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from urllib.parse import urlparse
 import uvicorn
 import aiohttp
 
@@ -19,11 +20,42 @@ API_BASE_URL = os.getenv('API_BASE_URL')
 API_KEY = os.getenv('API_KEY')
 
 PROXY_URL = os.getenv('PROXY_URL')
-PROXY_USER = os.getenv('PROXY_USER')
-PROXY_PASS = os.getenv('PROXY_PASS')
 
-proxy_auth = aiohttp.BasicAuth(PROXY_USER, PROXY_PASS)
-proxy = PROXY_URL
+def parse_proxy(full_url):
+    if not full_url:
+        return None, None
+    
+    parsed = urlparse(full_url)
+    auth = None
+    if '@' in parsed.netloc:
+        auth_part, host_part = parsed.netloc.split('@', 1)
+        user = auth_part
+        passw = ''
+        if ':' in auth_part:
+            user, passw = auth_part.split(':', 1)
+        try:
+            auth = aiohttp.BasicAuth(user, passw)
+        except ValueError as e:
+            logger.error(f"Invalid proxy auth in {full_url}: {e}")
+            return None, None 
+    else:
+        host_part = parsed.netloc
+    
+    proxy = f"{parsed.scheme}://{host_part}{parsed.path or ''}"
+    return proxy, auth
+
+def get_proxy():
+    if not PROXY_URL:
+        return None, None
+    proxies = [p.strip() for p in PROXY_URL.split(',')]
+    if not proxies:
+        return None, None
+    selected = proxies[0]
+    proxy, auth = parse_proxy(selected)
+    logger.info(f"Using proxy: {proxy or 'None'} (auth: {'enabled' if auth else 'none'})")
+    return proxy, auth
+
+proxy, auth = get_proxy()
 
 PLAT_PURSUIT_EMOJI_ID = os.getenv('PLAT_PURSUIT_EMOJI_ID')
 PLATINUM_EMOJI_ID = os.getenv('PLATINUM_EMOJI_ID')
@@ -41,7 +73,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix='__', intents=intents, proxy=proxy, proxy_auth=proxy_auth)
+bot = commands.Bot(command_prefix='__', intents=intents, proxy=proxy, proxy_auth=auth)
 
 bot.api_base_url = API_BASE_URL
 bot.api_key = API_KEY

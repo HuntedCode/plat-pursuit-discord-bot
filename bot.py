@@ -51,12 +51,12 @@ async def role_assignment_worker():
                     retry_after = float(e.response.headers.get('Retry-After', 1))
                     logger.warning(f"Rate limited (429) on role assignment. Retrying after {retry_after} seconds.")
                     await asyncio.sleep(retry_after + 0.5)
-                    retry_count += 1
                 else:
                     logger.error(f"Role assignment failed: {e}")
             except Exception as e:
                 logger.error(f"Error assigning role from queue: {e}")
                 await asyncio.sleep(1)
+            finally:
                 retry_count += 1
         if retry_count >= max_retries:
             logger.error(f"Max retries exceeded for role assignment: {data}. Dropping request.")

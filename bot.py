@@ -110,6 +110,10 @@ GUILD_ID = int(os.getenv('DISCORD_GUILD_ID', 0))
 app = FastAPI()
 security = HTTPBearer()
 
+@app.get("/health")
+async def health_check():
+    return {'status': 'healthy'}
+
 @app.post("/assign-role")
 async def assign_role(data: dict, credentials: HTTPAuthorizationCredentials = Depends(security)):
     if credentials.credentials != API_KEY:

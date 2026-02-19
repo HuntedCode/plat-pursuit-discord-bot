@@ -9,13 +9,16 @@ from fastapi import FastAPI, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 import signal
+import hmac
 from urllib.parse import urlparse
 from aiohttp import BasicAuth, ClientSession
+from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO)  # Set to DEBUG for verbose dev
 logger = logging.getLogger(__name__)
 
 role_queue = asyncio.Queue()
+role_removal_queue = asyncio.Queue()
 
 async def role_assignment_worker():
     while True:
@@ -31,18 +34,18 @@ async def role_assignment_worker():
                 guild = bot.get_guild(guild_id)
                 if not guild:
                     logger.error(f"Guild not found: {guild_id}")
-                    continue
+                    break
 
                 member = guild.get_member(user_id)
                 if not member:
                     logger.error(f"Member not found: {user_id} in guild {guild_id}")
-                    continue
+                    break
 
                 role = guild.get_role(role_id)
                 if not role:
                     logger.error(f"Role not found: {role_id} in guild {guild_id}")
-                    continue
-                
+                    break
+
                 await member.add_roles(role)
                 logger.info(f"Assigned role {role.name} to {member.name} in guild {guild_id}")
                 break
@@ -61,6 +64,57 @@ async def role_assignment_worker():
         if retry_count >= max_retries:
             logger.error(f"Max retries exceeded for role assignment: {data}. Dropping request.")
         role_queue.task_done()
+
+        await asyncio.sleep(0.5)
+
+async def role_removal_worker():
+    while True:
+        data = await role_removal_queue.get()
+        max_retries = 5
+        retry_count = 0
+        while retry_count < max_retries:
+            try:
+                user_id = data.get('user_id')
+                role_id = data.get('role_id')
+                guild_id = data.get('guild_id', GUILD_ID)
+
+                guild = bot.get_guild(guild_id)
+                if not guild:
+                    logger.error(f"Guild not found: {guild_id}")
+                    break
+
+                member = guild.get_member(user_id)
+                if not member:
+                    logger.error(f"Member not found: {user_id} in guild {guild_id}")
+                    break
+
+                role = guild.get_role(role_id)
+                if not role:
+                    logger.error(f"Role not found: {role_id} in guild {guild_id}")
+                    break
+
+                if role not in member.roles:
+                    logger.info(f"Member {member.name} does not have role {role.name}, skipping removal")
+                    break
+
+                await member.remove_roles(role)
+                logger.info(f"Removed role {role.name} from {member.name} in guild {guild_id}")
+                break
+            except discord.HTTPException as e:
+                if e.status == 429:
+                    retry_after = float(e.response.headers.get('Retry-After', 1))
+                    logger.warning(f"Rate limited (429) on role removal. Retrying after {retry_after} seconds.")
+                    await asyncio.sleep(retry_after + 0.5)
+                else:
+                    logger.error(f"Role removal failed: {e}")
+            except Exception as e:
+                logger.error(f"Error removing role from queue: {e}")
+                await asyncio.sleep(1)
+            finally:
+                retry_count += 1
+        if retry_count >= max_retries:
+            logger.error(f"Max retries exceeded for role removal: {data}. Dropping request.")
+        role_removal_queue.task_done()
 
         await asyncio.sleep(0.5)
 
@@ -97,6 +151,8 @@ bot = commands.Bot(command_prefix='__', intents=intents, proxy=PROXY, proxy_auth
 
 bot.api_base_url = API_BASE_URL
 bot.api_key = API_KEY
+bot.api_headers = {'Authorization': f"Token {API_KEY}"}
+bot.api_session = None
 bot.verified_role_id = int(os.getenv('VERIFIED_ROLE_ID', 0))
 
 bot.plat_pursuit_emoji = f"<:PlatPursuit:{PLAT_PURSUIT_EMOJI_ID}>" if PLAT_PURSUIT_EMOJI_ID else "🏆"
@@ -110,21 +166,30 @@ GUILD_ID = int(os.getenv('DISCORD_GUILD_ID', 0))
 app = FastAPI()
 security = HTTPBearer()
 
+class RoleRequest(BaseModel):
+    user_id: int
+    role_id: int
+    guild_id: int | None = None
+
+def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    if not hmac.compare_digest(credentials.credentials, API_KEY):
+        raise HTTPException(status_code=401, detail='Invalid API key')
+
 @app.get("/health")
 async def health_check():
     return {'status': 'healthy'}
 
 @app.post("/assign-role")
-async def assign_role(data: dict, credentials: HTTPAuthorizationCredentials = Depends(security)):
-    if credentials.credentials != API_KEY:
-        raise HTTPException(status_code=401, detail='Invalid API key')
-    
-    if not data.get('user_id') or not data.get('role_id'):
-        raise HTTPException(status_code=400, detail='Missing user_id or role_id')
-    
-    await role_queue.put(data)
-    logger.info(f"Queued role assignment: {data}")
+async def assign_role(data: RoleRequest, _=Depends(verify_api_key)):
+    await role_queue.put(data.model_dump(exclude_none=True))
+    logger.info(f"Queued role assignment: user={data.user_id} role={data.role_id}")
     return {'status': 'queued', 'message': 'Role assignment queued for processing'}
+
+@app.post("/remove-role")
+async def remove_role(data: RoleRequest, _=Depends(verify_api_key)):
+    await role_removal_queue.put(data.model_dump(exclude_none=True))
+    logger.info(f"Queued role removal: user={data.user_id} role={data.role_id}")
+    return {'status': 'queued', 'message': 'Role removal queued for processing'}
 
 @bot.event
 async def on_ready():
@@ -135,7 +200,7 @@ async def on_ready():
             synced = await bot.tree.sync()
             logger.info(f"Synced {len(synced)} slash commands.")
     except Exception as e:
-        print(f"Failed to sync commands: {e}")
+        logger.error(f"Failed to sync commands: {e}")
 
 @bot.tree.command(name='ping', description='Test bot responsiveness.')
 async def ping(interaction: discord.Interaction):
@@ -162,6 +227,7 @@ async def load_extensions():
 
 bot_task = None
 worker_task = None
+removal_worker_task = None
 server_task = None
 server = None
 
@@ -173,6 +239,8 @@ async def shutdown():
         bot_task.cancel()
     if worker_task:
         worker_task.cancel()
+    if removal_worker_task:
+        removal_worker_task.cancel()
 
 def shutdown_handler(signum, frame):
     logger.info(f"Received signal {signum} - Initiating graceful shutdown")
@@ -196,32 +264,38 @@ async def check_proxy_ip():
         raise
 
 async def main():
-    global bot_task, worker_task, server_task, server
+    global bot_task, worker_task, removal_worker_task, server_task, server
     await load_extensions()
-    
+
     await check_proxy_ip()
+
+    bot.api_session = ClientSession(headers=bot.api_headers)
 
     bot_task = None
     worker_task = asyncio.create_task(role_assignment_worker())
+    removal_worker_task = asyncio.create_task(role_removal_worker())
 
     loop = asyncio.get_running_loop()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, lambda s=sig: shutdown_handler(s, None))
+    try:
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, lambda s=sig: shutdown_handler(s, None))
+    except NotImplementedError:
+        logger.warning("Signal handlers not supported on this platform (Windows). Use Ctrl+C to stop.")
 
     config = uvicorn.Config(app=app, host=BOT_API_HOST, port=BOT_API_PORT, log_level='info')
     server = uvicorn.Server(config)
-    
+
     server_task = asyncio.create_task(server.serve())
 
-    logger.info(f"Starting bot and worker...")
+    logger.info("Starting bot and worker...")
 
     max_retries = 5
     retry_delay = 1.0
-    for attempt in range(1, max_retries + 1):
-        try:
+    try:
+        for attempt in range(1, max_retries + 1):
             try:
                 bot_task = asyncio.create_task(bot.start(TOKEN))
-                await asyncio.gather(bot_task, worker_task, server_task)
+                await asyncio.gather(bot_task, worker_task, removal_worker_task, server_task)
                 break
             except discord.HTTPException as e:
                 if e.status == 429 and attempt < max_retries:
@@ -239,30 +313,39 @@ async def main():
                     retry_delay *= 2
                 else:
                     raise
-            
-        except asyncio.CancelledError:
-            logger.info('Tasks cancelled - Shutting down')
-        finally:
-            logger.info("Cleaning up resources...")
+    except asyncio.CancelledError:
+        logger.info('Tasks cancelled - Shutting down')
+    finally:
+        logger.info("Cleaning up resources...")
 
-            while not role_queue.empty():
-                try:
-                    data = await asyncio.wait_for(role_queue.get(), timeout=1.0)
-                    role_queue.task_done()
-                except asyncio.TimeoutError:
-                    break
-            if worker_task:
-                worker_task.cancel()
-            await asyncio.sleep(0)
-            if bot.is_ready():
-                await bot.close()
-            else:
-                if bot_task:
-                    bot_task.cancel()
-            if server:
-                await server.shutdown()
+        while not role_queue.empty():
+            try:
+                data = await asyncio.wait_for(role_queue.get(), timeout=1.0)
+                role_queue.task_done()
+            except asyncio.TimeoutError:
+                break
+        while not role_removal_queue.empty():
+            try:
+                data = await asyncio.wait_for(role_removal_queue.get(), timeout=1.0)
+                role_removal_queue.task_done()
+            except asyncio.TimeoutError:
+                break
+        if worker_task:
+            worker_task.cancel()
+        if removal_worker_task:
+            removal_worker_task.cancel()
+        await asyncio.sleep(0)
+        if bot.is_ready():
+            await bot.close()
+        else:
+            if bot_task:
+                bot_task.cancel()
+        if bot.api_session:
+            await bot.api_session.close()
+        if server:
+            await server.shutdown()
 
-            logger.info('Shutdown complete.')
+        logger.info('Shutdown complete.')
 
 if __name__ == '__main__':
     try:

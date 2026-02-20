@@ -1,6 +1,7 @@
 import discord
 from discord import app_commands
 from discord.ext import commands
+import asyncio
 import logging
 
 logger = logging.getLogger('psn_api')
@@ -8,6 +9,21 @@ logger = logging.getLogger('psn_api')
 class LinkCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+
+    async def _sync_roles_fire_and_forget(self, discord_id: str):
+        """Call sync-roles API after verification. Failures are logged but not surfaced to user."""
+        try:
+            session = self.bot.api_session
+            payload = {'discord_id': discord_id}
+            async with session.post(f"{self.bot.api_base_url}sync-roles/", json=payload) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    logger.info(f"Post-verify sync-roles succeeded for {discord_id}: {data.get('roles_synced', 0)} roles synced")
+                else:
+                    body = await resp.text()
+                    logger.warning(f"Post-verify sync-roles returned {resp.status} for {discord_id}: {body}")
+        except Exception as e:
+            logger.error(f"Post-verify sync-roles failed for {discord_id}: {e}")
 
     @app_commands.command(name='link', description='Begin linking your PSN. NOTE: Generates a code that must be verified!')
     @app_commands.describe(psn_username='Your PSN username (required)')
@@ -54,6 +70,7 @@ class LinkCog(commands.Cog):
                                         logger.error(f"Role assignment error: {e}")
                                         await button_interaction.followup.send('Verification succeeded but unexpected error assigning role. Contact admin.', ephemeral=True)
                                         return
+                                asyncio.create_task(self._sync_roles_fire_and_forget(discord_id))
                                 await button_interaction.followup.send('Success! Your PSN is verified and linked.', ephemeral=True)
                             else:
                                 await button_interaction.followup.send(f"Error: {data.get('message', 'Verification failed. Check About Me and permissions.')}", ephemeral=True)

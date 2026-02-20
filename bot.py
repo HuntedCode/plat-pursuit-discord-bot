@@ -194,11 +194,9 @@ async def remove_role(data: RoleRequest, _=Depends(verify_api_key)):
 @bot.event
 async def on_ready():
     logger.info(f"{bot.user} has connected to Discord! Ready to Pursue Plats!")
-    args = parser.parse_args()
     try:
-        if args.sync_commands: 
-            synced = await bot.tree.sync()
-            logger.info(f"Synced {len(synced)} slash commands.")
+        synced = await bot.tree.sync()
+        logger.info(f"Synced {len(synced)} slash commands.")
     except Exception as e:
         logger.error(f"Failed to sync commands: {e}")
 
@@ -214,6 +212,8 @@ async def load_extensions():
         'commands.refresh_user',
         'commands.summary',
         'commands.trophy_case',
+        'commands.sync_roles',
+        'commands.sync_roles_user',
 
         'commands.welcome',
         'commands.member_events',

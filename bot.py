@@ -214,6 +214,7 @@ async def load_extensions():
         'commands.trophy_case',
         'commands.sync_roles',
         'commands.sync_roles_user',
+        'commands.recheck_badges_user',
 
         'commands.welcome',
         'commands.member_events',

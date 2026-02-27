@@ -38,8 +38,11 @@ async def role_assignment_worker():
 
                 member = guild.get_member(user_id)
                 if not member:
-                    logger.error(f"Member not found: {user_id} in guild {guild_id}")
-                    break
+                    try:
+                        member = await guild.fetch_member(user_id)
+                    except discord.NotFound:
+                        logger.error(f"Member not found: {user_id} in guild {guild_id}")
+                        break
 
                 role = guild.get_role(role_id)
                 if not role:
@@ -85,8 +88,11 @@ async def role_removal_worker():
 
                 member = guild.get_member(user_id)
                 if not member:
-                    logger.error(f"Member not found: {user_id} in guild {guild_id}")
-                    break
+                    try:
+                        member = await guild.fetch_member(user_id)
+                    except discord.NotFound:
+                        logger.error(f"Member not found: {user_id} in guild {guild_id}")
+                        break
 
                 role = guild.get_role(role_id)
                 if not role:

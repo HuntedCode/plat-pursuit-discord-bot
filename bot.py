@@ -153,7 +153,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix='__', intents=intents, proxy=PROXY, proxy_auth=PROXY_AUTH)
+bot = commands.Bot(command_prefix='!', intents=intents, proxy=PROXY, proxy_auth=PROXY_AUTH)
 
 bot.api_base_url = API_BASE_URL
 bot.api_key = API_KEY
@@ -221,6 +221,8 @@ async def load_extensions():
         'commands.sync_roles',
         'commands.sync_roles_user',
         'commands.recheck_badges_user',
+
+        'commands.link_help',
 
         'commands.welcome',
         'commands.member_events',

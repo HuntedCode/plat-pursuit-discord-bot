@@ -226,6 +226,7 @@ async def load_extensions():
 
         'commands.welcome',
         'commands.member_events',
+        'commands.audit_log',
     ]
     for ext in extensions:
         try:

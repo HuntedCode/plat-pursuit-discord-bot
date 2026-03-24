@@ -60,6 +60,8 @@ PlatBot/
 │   ├── sync_roles.py       # /sync-roles: manually sync achievement roles
 │   ├── sync_roles_user.py  # /sync_roles_user: mod command to sync another user
 │   ├── recheck_badges.py   # /recheck_badges_user: mod command for full badge audit
+│   ├── link_help.py        # !link: public instructions for PSN account linking
+│   ├── audit_log.py        # Event listener: member join/leave logging to audit channel
 │   └── ping.py             # /ping: bot responsiveness check
 ├── utils/                  # Shared utilities
 ├── requirements.txt        # Python dependencies
@@ -130,6 +132,7 @@ async def setup(bot):
 | `WELCOME_CHANNEL_ID` | Channel for welcome messages |
 | `ENABLE_WELCOME_PINGS` | Toggle welcome ping behavior |
 | `WELCOME_DELAY_SECONDS` | Delay before sending welcome message |
+| `AUDIT_LOG_CHANNEL_ID` | Channel for member join/leave audit log embeds |
 | `PORT`, `BOT_API_HOST` | FastAPI server configuration |
 | `PROXY_URL` | Optional outbound proxy |
 | Emoji IDs | Various custom emoji references for rich embeds |

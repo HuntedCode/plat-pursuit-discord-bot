@@ -43,12 +43,27 @@ class LinkCog(commands.Cog):
                     inline=False
                 )
 
+                if data.get('privacy_warning'):
+                    embed.add_field(
+                        name="⚠️ Privacy Warning",
+                        value=data['privacy_warning'],
+                        inline=False
+                    )
+
                 view = discord.ui.View(timeout=900)
 
                 async def verify_callback(button_interaction: discord.Interaction):
                     await button_interaction.response.defer(ephemeral=True)
                     verify_payload = {'discord_id': discord_id, 'psn_username': psn_username.lower()}
                     async with session.post(f"{self.bot.api_base_url}verify/", json=verify_payload) as verify_resp:
+                        if verify_resp.status == 403:
+                            data = await verify_resp.json()
+                            await button_interaction.followup.send(
+                                f"Error: {data.get('message', 'This PSN profile has its privacy settings enabled. Please set your gaming history to public and try again.')}",
+                                ephemeral=True
+                            )
+                            return
+
                         if verify_resp.status == 200:
                             data = await verify_resp.json()
                             if data.get('success'):
@@ -74,6 +89,12 @@ class LinkCog(commands.Cog):
                                 await button_interaction.followup.send('Success! Your PSN is verified and linked.', ephemeral=True)
                             else:
                                 await button_interaction.followup.send(f"Error: {data.get('message', 'Verification failed. Check About Me and permissions.')}", ephemeral=True)
+                        elif verify_resp.status == 502:
+                            data = await verify_resp.json()
+                            await button_interaction.followup.send(
+                                f"Error: {data.get('message', 'PSN sync failed. Please try again later.')}",
+                                ephemeral=True
+                            )
                         else:
                             await button_interaction.followup.send('API error. Please try again later.', ephemeral=True)
 

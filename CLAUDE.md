@@ -49,7 +49,7 @@ Role assignments and removals use async worker queues with retry logic and rate-
 
 ```
 PlatBot/
-├── bot.py                  # Main entry: bot setup, FastAPI app, worker queues, event handlers
+├── bot.py                  # Main entry: bot setup, FastAPI app, worker queues, event handlers, inline /ping
 ├── commands/               # discord.py Cogs (one feature per file)
 │   ├── link.py             # /link: PSN account linking with verification code
 │   ├── unlink.py           # /unlink: disconnect PSN account
@@ -59,11 +59,12 @@ PlatBot/
 │   ├── trophy_case.py      # /trophy_case: paginated platinum display
 │   ├── sync_roles.py       # /sync-roles: manually sync achievement roles
 │   ├── sync_roles_user.py  # /sync_roles_user: mod command to sync another user
-│   ├── recheck_badges.py   # /recheck_badges_user: mod command for full badge audit
+│   ├── recheck_badges_user.py # /recheck_badges_user: mod command for full badge audit
 │   ├── community_stats.py  # /trophystats today|yesterday|records: community-wide trophy aggregates
 │   ├── link_help.py        # !link: public instructions for PSN account linking
-│   ├── audit_log.py        # Event listener: member join/leave logging to audit channel
-│   └── ping.py             # /ping: bot responsiveness check
+│   ├── welcome.py          # Event listener: posts a welcome embed when a member joins
+│   ├── member_events.py    # Event listener: auto-unlinks PSN profile on member leave (toggle: ENABLE_UNLINK_ON_LEAVE)
+│   └── audit_log.py        # Event listener: member join/leave logging to audit channel
 ├── utils/                  # Shared utilities
 │   └── formatting.py       # Number/string formatters shared across cogs
 ├── docs/                   # Feature documentation (see docs/features/)
@@ -135,6 +136,7 @@ async def setup(bot):
 | `WELCOME_CHANNEL_ID` | Channel for welcome messages |
 | `ENABLE_WELCOME_PINGS` | Toggle welcome ping behavior |
 | `WELCOME_DELAY_SECONDS` | Delay before sending welcome message |
+| `ENABLE_UNLINK_ON_LEAVE` | Toggle auto-unlink of PSN profile on member leave |
 | `AUDIT_LOG_CHANNEL_ID` | Channel for member join/leave audit log embeds |
 | `PORT`, `BOT_API_HOST` | FastAPI server configuration |
 | `PROXY_URL` | Optional outbound proxy |

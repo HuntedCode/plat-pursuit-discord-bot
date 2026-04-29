@@ -36,7 +36,7 @@ PlatBot runs two services in the same process:
 ### Communication with PlatPursuit
 
 - All API calls go through `API_BASE_URL` with `API_KEY` header authentication
-- Key API endpoints consumed: `generate-code/`, `verify/`, `summary/`, `trophy-case/`, `sync-roles/`, `refresh/`, `unlink/`, `check-linked/`, `recheck-badges/`
+- Key API endpoints consumed: `generate-code/`, `verify/`, `summary/`, `trophy-case/`, `sync-roles/`, `refresh/`, `unlink/`, `check-linked/`, `recheck-badges/`, `community-stats/today/`, `community-stats/<date>/`, `community-stats/records/`
 - PlatPursuit triggers role operations by calling PlatBot's `/assign-role` and `/remove-role` FastAPI endpoints
 
 ### Worker Queue System
@@ -60,10 +60,13 @@ PlatBot/
 │   ├── sync_roles.py       # /sync-roles: manually sync achievement roles
 │   ├── sync_roles_user.py  # /sync_roles_user: mod command to sync another user
 │   ├── recheck_badges.py   # /recheck_badges_user: mod command for full badge audit
+│   ├── community_stats.py  # /trophystats today|yesterday|records: community-wide trophy aggregates
 │   ├── link_help.py        # !link: public instructions for PSN account linking
 │   ├── audit_log.py        # Event listener: member join/leave logging to audit channel
 │   └── ping.py             # /ping: bot responsiveness check
 ├── utils/                  # Shared utilities
+│   └── formatting.py       # Number/string formatters shared across cogs
+├── docs/                   # Feature documentation (see docs/features/)
 ├── requirements.txt        # Python dependencies
 ├── Dockerfile              # Multi-stage Docker build
 ├── .env                    # Environment configuration (not committed)

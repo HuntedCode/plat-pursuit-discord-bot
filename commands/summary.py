@@ -3,6 +3,8 @@ from discord import app_commands
 from discord.ext import commands
 import logging
 
+from utils.formatting import format_number
+
 logger = logging.getLogger('psn_api')
 
 class SummaryCog(commands.Cog):
@@ -16,9 +18,6 @@ class SummaryCog(commands.Cog):
         half = 1 if (length * (percentage / 100) - filled) >= 0.5 else 0
         empty = length - filled - half
         return '[' + '▓' * filled + '▒' * half + '░' * empty + f'] {percentage}%'
-
-    def format_number(self, number: int) -> str:
-        return f"{number:,}" if number is not None else "0"
 
     @app_commands.command(name='summary', description='View your or another user\'s trophy progress.')
     @app_commands.describe(user='Optional: Mention a user to view their trophies. Leave blank to view your own.')
@@ -50,9 +49,9 @@ class SummaryCog(commands.Cog):
                     # Trophy Breakdown
                     if profile['psn_history_public']:
                         summary = profile['earned_trophy_summary']
-                        embed.add_field(name='Trophy Breakdown', value=f"{self.bot.platinum_emoji} Platinum: {self.format_number(summary.get('platinum', 0))}\n{self.bot.gold_emoji} Gold: {self.format_number(summary.get('gold', 0))}\n{self.bot.silver_emoji} Silver: {self.format_number(summary.get('silver', 0))}\n{self.bot.bronze_emoji} Bronze: {self.format_number(summary.get('bronze', 0))}", inline=False)
-                        embed.add_field(name='Total Trophies', value=f"**{self.format_number(profile['total_trophies'])}**", inline=True)
-                        embed.add_field(name='Games Played', value=self.format_number(profile['total_games']), inline=True)
+                        embed.add_field(name='Trophy Breakdown', value=f"{self.bot.platinum_emoji} Platinum: {format_number(summary.get('platinum', 0))}\n{self.bot.gold_emoji} Gold: {format_number(summary.get('gold', 0))}\n{self.bot.silver_emoji} Silver: {format_number(summary.get('silver', 0))}\n{self.bot.bronze_emoji} Bronze: {format_number(summary.get('bronze', 0))}", inline=False)
+                        embed.add_field(name='Total Trophies', value=f"**{format_number(profile['total_trophies'])}**", inline=True)
+                        embed.add_field(name='Games Played', value=format_number(profile['total_games']), inline=True)
                     else:
                         embed.add_field(name="⚠️ Warning", value="Incorrect PSN permissions. Set 'Gaming History' to 'Anyone' for full stats.", inline=False)
 

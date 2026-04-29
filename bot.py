@@ -222,6 +222,8 @@ async def load_extensions():
         'commands.sync_roles_user',
         'commands.recheck_badges_user',
 
+        'commands.community_stats',
+
         'commands.link_help',
 
         'commands.welcome',

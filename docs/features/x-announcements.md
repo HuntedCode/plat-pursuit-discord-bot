@@ -31,26 +31,25 @@ If the toggle is on but any required field is missing, the cog logs a warning an
 
 ## Admin endpoints
 
-Two FastAPI endpoints on the bot's HTTP server, intended for invocation from the Render shell console via `curl`. Both use the existing `API_KEY` Bearer auth (same as `/assign-role` and `/remove-role`).
+Two FastAPI endpoints on the bot's HTTP server, intended for invocation from the Render shell console. Both use the existing `API_KEY` Bearer auth (same as `/assign-role` and `/remove-role`).
 
 | Endpoint | Purpose | Updates baseline? |
 |---|---|---|
 | `POST /admin/x-announce/test` | Posts the latest feed entry to `X_TEST_ANNOUNCEMENT_CHANNEL_ID` with `X_TEST_ANNOUNCEMENT_ROLE_ID`. Used to preview real content in a test server before flipping the production toggle. | No |
-| `POST /admin/x-announce/latest` | Posts the latest feed entry to the production channel/role. Used as a manual recovery if the auto-poller missed a post or errored. | Yes — sets `last_seen_id` to the entry that was just announced, so the auto-poller will not re-announce it on its next tick. |
+| `POST /admin/x-announce/latest` | Posts the latest feed entry to the production channel/role. Used as a manual recovery if the auto-poller missed a post or errored. | Yes. Sets `last_seen_id` to the entry that was just announced, so the auto-poller will not re-announce it on its next tick. |
 
-Both reuse the running cog's session and Discord connection — they do not spin up a new client. Both are safe to invoke even when `ENABLE_X_ANNOUNCEMENTS=False`, since the cog is loaded regardless and only the poll loop is gated by the toggle.
+Both reuse the running cog's session and Discord connection (no new client is spun up). Both are safe to invoke even when `ENABLE_X_ANNOUNCEMENTS=False`, since the cog is loaded regardless and only the poll loop is gated by the toggle.
 
 ### From the Render shell
 
-```bash
-curl -X POST http://localhost:$PORT/admin/x-announce/test \
-  -H "Authorization: Bearer $API_KEY"
+The bot container is `python:3.12-slim`, which does not ship with `curl`. Use the wrapper script at [scripts/x_admin.py](../../scripts/x_admin.py):
 
-curl -X POST http://localhost:$PORT/admin/x-announce/latest \
-  -H "Authorization: Bearer $API_KEY"
+```bash
+python scripts/x_admin.py test     # fires to test server
+python scripts/x_admin.py latest   # fires to prod and advances baseline
 ```
 
-Successful responses return `{"status": "ok", "link": "https://x.com/..."}`. Failure modes:
+The script uses stdlib `urllib`, reads `API_KEY` and `PORT` from the container env, and prints the response to stdout. Successful responses look like `[200] {"status": "ok", "link": "https://x.com/..."}`. Failure modes:
 
 | Status | Meaning |
 |---|---|
@@ -73,7 +72,7 @@ The send call passes `allowed_mentions=AllowedMentions(roles=True, everyone=Fals
 
 When `X_OWN_HANDLE` is set, the cog filters feed entries to those whose `<link>` URL begins with `https://x.com/<handle>/status/`. Retweets in RSS.app feeds carry the *original author's* link (e.g. `https://x.com/SomeoneElse/status/...`) rather than the feed owner's, so the URL handle is a reliable, RSS.app-format-independent signal.
 
-The filter is applied uniformly to the auto-poll loop, the `/admin/x-announce/latest` endpoint, and the `/admin/x-announce/test` endpoint — so manual fires also skip retweets and announce the most recent *owned* tweet.
+The filter is applied uniformly to the auto-poll loop, the `/admin/x-announce/latest` endpoint, and the `/admin/x-announce/test` endpoint, so manual fires also skip retweets and announce the most recent *owned* tweet.
 
 If a feed entry has a link that doesn't match the expected X URL pattern at all (unexpected source format), the cog logs a warning and allows it through rather than silently dropping. This favors not-missing-real-posts over zero-noise; if a future RSS oddity ever causes spam, tighten this to drop-unknowns.
 

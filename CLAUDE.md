@@ -68,6 +68,8 @@ PlatBot/
 │   └── x_announcements.py  # Background task: polls an X RSS feed and announces new posts to a channel (toggle: ENABLE_X_ANNOUNCEMENTS)
 ├── utils/                  # Shared utilities
 │   └── formatting.py       # Number/string formatters shared across cogs
+├── scripts/                # Operational CLI helpers (run inside the container via Render shell)
+│   └── x_admin.py          # Wrapper for /admin/x-announce/{test,latest} (curl-free)
 ├── docs/                   # Feature documentation (see docs/features/)
 ├── requirements.txt        # Python dependencies
 ├── Dockerfile              # Multi-stage Docker build

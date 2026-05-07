@@ -64,7 +64,8 @@ PlatBot/
 │   ├── link_help.py        # !link: public instructions for PSN account linking
 │   ├── welcome.py          # Event listener: posts a welcome embed when a member joins
 │   ├── member_events.py    # Event listener: auto-unlinks PSN profile on member leave (toggle: ENABLE_UNLINK_ON_LEAVE)
-│   └── audit_log.py        # Event listener: member join/leave logging to audit channel
+│   ├── audit_log.py        # Event listener: member join/leave logging to audit channel
+│   └── x_announcements.py  # Background task: polls an X RSS feed and announces new posts to a channel (toggle: ENABLE_X_ANNOUNCEMENTS)
 ├── utils/                  # Shared utilities
 │   └── formatting.py       # Number/string formatters shared across cogs
 ├── docs/                   # Feature documentation (see docs/features/)
@@ -138,6 +139,14 @@ async def setup(bot):
 | `WELCOME_DELAY_SECONDS` | Delay before sending welcome message |
 | `ENABLE_UNLINK_ON_LEAVE` | Toggle auto-unlink of PSN profile on member leave |
 | `AUDIT_LOG_CHANNEL_ID` | Channel for member join/leave audit log embeds |
+| `ENABLE_X_ANNOUNCEMENTS` | Toggle the X (Twitter) RSS announcement poller |
+| `X_RSS_FEED_URL` | RSS feed URL for the X profile to monitor (e.g. via RSS.app) |
+| `X_ANNOUNCEMENT_CHANNEL_ID` | Channel where new X posts are announced |
+| `X_ANNOUNCEMENT_ROLE_ID` | Role pinged in announcements (must be mentionable or use allowed_mentions, which the cog does) |
+| `X_POLL_INTERVAL_MINUTES` | How often to poll the RSS feed (default 15) |
+| `X_OWN_HANDLE` | The X handle (no `@`) whose own tweets should be announced. Filters out retweets by comparing the tweet link's URL handle. Unset = no filter. |
+| `X_TEST_ANNOUNCEMENT_CHANNEL_ID` | Channel in the admin/testing server, used by `POST /admin/x-announce/test` |
+| `X_TEST_ANNOUNCEMENT_ROLE_ID` | Role in the admin/testing server, used by `POST /admin/x-announce/test` |
 | `PORT`, `BOT_API_HOST` | FastAPI server configuration |
 | `PROXY_URL` | Optional outbound proxy |
 | Emoji IDs | Various custom emoji references for rich embeds |

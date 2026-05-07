@@ -197,6 +197,38 @@ async def remove_role(data: RoleRequest, _=Depends(verify_api_key)):
     logger.info(f"Queued role removal: user={data.user_id} role={data.role_id}")
     return {'status': 'queued', 'message': 'Role removal queued for processing'}
 
+@app.post("/admin/x-announce/test")
+async def admin_x_announce_test(_=Depends(verify_api_key)):
+    cog = bot.get_cog('XAnnouncementsCog')
+    if not cog:
+        raise HTTPException(status_code=503, detail='X announcements cog not loaded')
+
+    test_channel_id = int(os.getenv('X_TEST_ANNOUNCEMENT_CHANNEL_ID', 0))
+    test_role_id = int(os.getenv('X_TEST_ANNOUNCEMENT_ROLE_ID', 0))
+    if not test_channel_id or not test_role_id:
+        raise HTTPException(status_code=400, detail='X_TEST_ANNOUNCEMENT_CHANNEL_ID and X_TEST_ANNOUNCEMENT_ROLE_ID must be set')
+
+    result = await cog.fire_latest(test_channel_id, test_role_id, update_baseline=False)
+    if result.get('status') == 'ok':
+        return result
+    raise HTTPException(status_code=502, detail=result.get('message', 'unknown error'))
+
+@app.post("/admin/x-announce/latest")
+async def admin_x_announce_latest(_=Depends(verify_api_key)):
+    cog = bot.get_cog('XAnnouncementsCog')
+    if not cog:
+        raise HTTPException(status_code=503, detail='X announcements cog not loaded')
+
+    channel_id = int(os.getenv('X_ANNOUNCEMENT_CHANNEL_ID', 0))
+    role_id = int(os.getenv('X_ANNOUNCEMENT_ROLE_ID', 0))
+    if not channel_id or not role_id:
+        raise HTTPException(status_code=400, detail='X_ANNOUNCEMENT_CHANNEL_ID and X_ANNOUNCEMENT_ROLE_ID must be set')
+
+    result = await cog.fire_latest(channel_id, role_id, update_baseline=True)
+    if result.get('status') == 'ok':
+        return result
+    raise HTTPException(status_code=502, detail=result.get('message', 'unknown error'))
+
 @bot.event
 async def on_ready():
     logger.info(f"{bot.user} has connected to Discord! Ready to Pursue Plats!")
@@ -229,6 +261,8 @@ async def load_extensions():
         'commands.welcome',
         'commands.member_events',
         'commands.audit_log',
+
+        'commands.x_announcements',
     ]
     for ext in extensions:
         try:

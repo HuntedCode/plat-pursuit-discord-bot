@@ -19,6 +19,11 @@ CLOSE_CUSTOM_ID = 'ticket:close'
 SELF_PREFIX = 'ticket-'
 MOD_PREFIX = 'modticket-'
 
+# The alert message stashes its thread id in the embed footer so it can be found and
+# edited on close (no DB). The scan window bounds the history lookback on close.
+ALERT_FOOTER_PREFIX = 'Ticket thread ID: '
+ALERT_SCAN_LIMIT = 200
+
 
 class TicketPanelView(discord.ui.View):
     """Persistent panel posted in the support channel. Re-registered on startup."""
@@ -67,6 +72,7 @@ class TicketsCog(commands.Cog):
         self.channel_id = int(os.getenv('TICKET_CHANNEL_ID', 0))
         self.mod_role_id = int(os.getenv('TICKET_MOD_ROLE_ID', 0))
         self.log_channel_id = int(os.getenv('TICKET_LOG_CHANNEL_ID', 0))
+        self.alert_channel_id = int(os.getenv('TICKET_ALERT_CHANNEL_ID', 0))
 
     async def cog_load(self):
         # Register persistent views so the panel and close buttons survive restarts.
@@ -94,14 +100,6 @@ class TicketsCog(commands.Cog):
     def _self_ticket_name(user) -> str:
         # Owner id is appended so the duplicate guard can identify the opener by name.
         return f"{SELF_PREFIX}{user.name}-{user.id}"
-
-    def _mod_members(self, guild):
-        """Members holding the mod role. A role @mention does not notify non-members of a
-        private thread, so mods must be added as thread members to be pinged and see it."""
-        if not self.mod_role_id or guild is None:
-            return []
-        role = guild.get_role(self.mod_role_id)
-        return [m for m in role.members if not m.bot] if role else []
 
     def _resolve_channel(self):
         """Return the configured ticket channel, or None if missing/misconfigured."""
@@ -140,10 +138,9 @@ class TicketsCog(commands.Cog):
             reason=f"Ticket opened by {opened_by} ({opened_by.id})",
         )
 
-        # Add the requested members (tracking failures to report back), then silently add the
-        # mod team so the role @mention below actually reaches them and the thread shows in
-        # their sidebar. Both are best-effort; a failed add never aborts the ticket.
-        requested_ids = {m.id for m in members}
+        # Add the requested members (best-effort; a failed add never aborts the ticket).
+        # Mods are NOT added here: they are notified via the staff alert channel and join
+        # a thread by responding to it. See _post_alert.
         added = []
         failed = []
         for member in members:
@@ -154,22 +151,12 @@ class TicketsCog(commands.Cog):
                 logger.warning(f"Failed to add {member.id} to ticket {thread.id}: {e}")
                 failed.append(member)
 
-        for mod in self._mod_members(channel.guild):
-            if mod.id in requested_ids:
-                continue
-            try:
-                await thread.add_user(mod)
-            except discord.HTTPException as e:
-                logger.warning(f"Failed to add mod {mod.id} to ticket {thread.id}: {e}")
-
-        content = self._mod_mention()
-        if added:
-            content += f" | {' '.join(m.mention for m in added)}"
+        content = ' '.join(m.mention for m in added) if added else None
         await thread.send(
             content=content,
             embed=embed,
             view=TicketControlView(),
-            allowed_mentions=discord.AllowedMentions(roles=True, users=True, everyone=False),
+            allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
         )
         return thread, failed
 
@@ -227,6 +214,13 @@ class TicketsCog(commands.Cog):
             await interaction.followup.send('Could not open a ticket right now. Please try again later.', ephemeral=True)
             return
 
+        alert = discord.Embed(
+            title='🎫 New Ticket',
+            color=0x00ff00,
+            description=f"{interaction.user.mention} opened a ticket.\n{thread.mention}",
+        )
+        await self._post_alert(thread, alert, ping=True)
+
         await interaction.followup.send(f"Your ticket has been created: {thread.mention}", ephemeral=True)
         logger.info(f"Ticket opened by {interaction.user.id} -> thread {thread.id}")
 
@@ -243,6 +237,7 @@ class TicketsCog(commands.Cog):
         thread = interaction.channel
 
         await self._post_transcript(thread, interaction.user)
+        await self._close_alert(thread, interaction.user)
 
         await thread.send(
             embed=discord.Embed(
@@ -297,6 +292,56 @@ class TicketsCog(commands.Cog):
             await log_channel.send(embed=embed, file=file)
         except discord.HTTPException as e:
             logger.error(f"Failed to post transcript for ticket {thread.id}: {e}")
+
+    async def _post_alert(self, thread: discord.Thread, embed: discord.Embed, ping: bool):
+        """Post a ticket alert to the staff channel. The thread id is stashed in the footer so
+        the alert can be found and edited on close. `ping` controls the mod-role notification."""
+        if not self.alert_channel_id:
+            return
+        channel = self.bot.get_channel(self.alert_channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            logger.warning(f"Ticket alert channel {self.alert_channel_id} not found; skipping alert.")
+            return
+
+        embed.set_footer(text=f"{ALERT_FOOTER_PREFIX}{thread.id}")
+        content = self._mod_mention() if ping else None
+        try:
+            await channel.send(
+                content=content,
+                embed=embed,
+                allowed_mentions=discord.AllowedMentions(roles=ping, users=False, everyone=False),
+            )
+        except discord.HTTPException as e:
+            logger.error(f"Failed to post ticket alert for thread {thread.id}: {e}")
+
+    async def _close_alert(self, thread: discord.Thread, closer: discord.Member):
+        """Find this thread's open alert in the staff channel and edit it to a closed state."""
+        if not self.alert_channel_id:
+            return
+        channel = self.bot.get_channel(self.alert_channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            return
+
+        target = f"{ALERT_FOOTER_PREFIX}{thread.id}"
+        try:
+            async for msg in channel.history(limit=ALERT_SCAN_LIMIT):
+                if msg.author.id != self.bot.user.id or not msg.embeds:
+                    continue
+                embed = msg.embeds[0]
+                if not (embed.footer and embed.footer.text == target):
+                    continue
+                embed.color = 0x99AAB5
+                embed.title = f"{embed.title or 'Ticket'} (Closed)"
+                embed.add_field(
+                    name='Closed',
+                    value=f"by {closer.mention} {discord.utils.format_dt(discord.utils.utcnow(), 'R')}",
+                    inline=False,
+                )
+                await msg.edit(content='Ticket closed.', embed=embed, allowed_mentions=discord.AllowedMentions.none())
+                return
+            logger.info(f"No open-ticket alert found within last {ALERT_SCAN_LIMIT} messages for thread {thread.id}")
+        except discord.HTTPException as e:
+            logger.error(f"Failed to update ticket alert for thread {thread.id}: {e}")
 
     @app_commands.command(name='ticket', description='Open a private support ticket with the moderators.')
     async def ticket(self, interaction: discord.Interaction):
@@ -375,6 +420,16 @@ class TicketsCog(commands.Cog):
             logger.error(f"Failed to create mod ticket thread: {e}")
             await interaction.followup.send('Could not open a ticket right now. Please try again later.', ephemeral=True)
             return
+
+        alert = discord.Embed(
+            title='🎫 New Moderation Ticket',
+            color=0xFFA500,
+            description=f"{interaction.user.mention} opened a ticket with {target_mentions}.\n{thread.mention}",
+        )
+        if reason:
+            alert.add_field(name='Reason', value=reason, inline=False)
+        # No ping: the acting mod already knows; this is a log entry for the rest of the team.
+        await self._post_alert(thread, alert, ping=False)
 
         msg = f"Ticket created: {thread.mention}"
         if failed:

@@ -40,7 +40,7 @@ The self-serve routes call the shared `handle_open` logic; both flows ultimately
 
 ### Self-serve vs mod-initiated, and the name-prefix invariant
 
-Threads are named by origin: self-serve tickets are `ticket-<username>`, mod-initiated tickets are `modticket-<username>`. This matters because the duplicate guard keys on thread *membership*, not on who opened it. Without the distinction, a user pulled into a mod ticket would be treated as already having an open ticket and blocked from using `/ticket`.
+Threads are named by origin: self-serve tickets are `ticket-<username>-<userid>`, mod-initiated tickets are `modticket-<username>`. The owner id is baked into the self-serve name so the duplicate guard can identify the opener from the name alone, without fetching thread members (which no longer works for identifying the owner, since mods are members of every ticket). Without the prefix distinction, a user pulled into a mod ticket would be treated as already having an open ticket and blocked from using `/ticket`.
 
 So the rules are:
 - **Self-serve (`/ticket`)** enforces one open ticket per user, but the duplicate scan only considers `ticket-` threads. A user pulled into a `modticket-` thread can still open their own.
@@ -48,10 +48,12 @@ So the rules are:
 
 ### Opening a ticket
 
-1. **Duplicate guard** (no DB): scans the support channel's active (non-archived) private threads and checks membership via `fetch_members`. If the user already has an open ticket, they get a link to it instead of a second thread.
-2. Creates a private thread named `ticket-<username>` in `TICKET_CHANNEL_ID` with `invitable=False` (members added to a ticket can't pull in others) and a 7-day auto-archive.
-3. Adds the opener, posts a starter embed, and pings `TICKET_MOD_ROLE_ID` + the opener via scoped `allowed_mentions` (role + user only, never @everyone).
+1. **Duplicate guard** (no DB): scans the support channel's active (non-archived) private threads for one whose name marks this user as the owner (a `ticket-` thread ending in `-<userid>`). If found, they get a link to it instead of a second thread.
+2. Creates a private thread named `ticket-<username>-<userid>` in `TICKET_CHANNEL_ID` with `invitable=False` (members added to a ticket can't pull in others) and a 7-day auto-archive.
+3. Adds the opener **and every member of `TICKET_MOD_ROLE_ID`** to the thread (see the role-ping gotcha below for why mods must be added, not just pinged), posts a starter embed, and pings the mod role + the opener via scoped `allowed_mentions` (role + user only, never @everyone).
 4. Replies ephemerally to the opener with a link to their new thread.
+
+Adding the mod team is handled centrally in `_create_ticket`, so both `/ticket` and `/ticket_user` get it. Mod adds are best-effort: a failed add (e.g. rate limit) is logged but never aborts the ticket.
 
 ### Closing a ticket
 
@@ -71,7 +73,8 @@ In the ticket channel the bot needs: **Create Private Threads**, **Send Messages
 ## Gotchas and Pitfalls
 
 - **Auto-archive is not deletion.** Private threads auto-archive after 7 days of inactivity (or immediately on close). Archived tickets are preserved and any mod can unarchive them. History is never lost unless a mod manually deletes the thread.
-- **Mods see tickets via permission, not membership.** Only the opener (and the bot) are added as thread *members*; mods read tickets through *Manage Threads*. This is why the duplicate-open scan keys on the opener's membership, not on the mod role.
+- **A role @mention does NOT notify non-members of a private thread.** This is the key Discord constraint behind the design. Mentioning `@mods` in a private thread only pings role holders who are *already in the thread*; everyone else gets nothing (Discord won't fan a role ping out to people who can't see the thread). That is why `_create_ticket` explicitly adds every mod-role member to each new ticket: once they are members, the role ping reaches them and the thread appears in their sidebar. Mentioning a *user* (as opposed to a role) does pull them in, but a role does not.
+- **Duplicate-open scan keys on the owner id in the thread name, not membership.** Because mods are now members of every ticket, membership can't identify who a ticket belongs to (a mod running `/ticket` would otherwise match the first ticket they were added to). The opener id is encoded in the self-serve thread name (`ticket-<username>-<userid>`) and the guard matches on that, scanning only `ticket-` threads so `modticket-` ones are ignored.
 - **`TICKET_CHANNEL_ID` must be a normal text channel**, not a forum or a category. Private threads are created on a text channel.
 - **Role ping requires the role ID, not the name.** Enable Developer Mode in Discord and right-click the role to copy its ID.
 - **PlatPursuit is not involved.** Tickets are pure-Discord moderation and do not touch the PlatPursuit API. If ticket analytics are ever wanted, logging metadata to the API on close is a clean future add-on.

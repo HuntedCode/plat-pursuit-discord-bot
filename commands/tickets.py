@@ -90,6 +90,19 @@ class TicketsCog(commands.Cog):
     def _mod_mention(self) -> str:
         return f"<@&{self.mod_role_id}>" if self.mod_role_id else 'Moderators'
 
+    @staticmethod
+    def _self_ticket_name(user) -> str:
+        # Owner id is appended so the duplicate guard can identify the opener by name.
+        return f"{SELF_PREFIX}{user.name}-{user.id}"
+
+    def _mod_members(self, guild):
+        """Members holding the mod role. A role @mention does not notify non-members of a
+        private thread, so mods must be added as thread members to be pinged and see it."""
+        if not self.mod_role_id or guild is None:
+            return []
+        role = guild.get_role(self.mod_role_id)
+        return [m for m in role.members if not m.bot] if role else []
+
     def _resolve_channel(self):
         """Return the configured ticket channel, or None if missing/misconfigured."""
         channel = self.bot.get_channel(self.channel_id)
@@ -98,21 +111,18 @@ class TicketsCog(commands.Cog):
             return None
         return channel
 
-    async def _find_open_ticket(self, channel: discord.TextChannel, user_id: int):
-        """Return the user's existing open *self-serve* ticket, or None. No DB: scan active threads.
+    def _find_open_ticket(self, channel: discord.TextChannel, user_id: int):
+        """Return the user's existing open *self-serve* ticket, or None. No DB.
 
+        Matches on the owner id encoded in the thread name (see _self_ticket_name) rather than
+        membership: mods are members of every ticket, so membership can't identify the owner.
         Only self-serve threads count, so a user pulled into a mod ticket can still open their own.
         """
+        suffix = f"-{user_id}"
         for thread in channel.threads:
             if thread.archived or thread.type != discord.ChannelType.private_thread:
                 continue
-            if not thread.name.startswith(SELF_PREFIX):
-                continue
-            try:
-                members = await thread.fetch_members()
-            except discord.HTTPException:
-                continue
-            if any(m.id == user_id for m in members):
+            if thread.name.startswith(SELF_PREFIX) and thread.name.endswith(suffix):
                 return thread
         return None
 
@@ -130,8 +140,12 @@ class TicketsCog(commands.Cog):
             reason=f"Ticket opened by {opened_by} ({opened_by.id})",
         )
 
-        failed = []
+        # Add the requested members (tracking failures to report back), then silently add the
+        # mod team so the role @mention below actually reaches them and the thread shows in
+        # their sidebar. Both are best-effort; a failed add never aborts the ticket.
+        requested_ids = {m.id for m in members}
         added = []
+        failed = []
         for member in members:
             try:
                 await thread.add_user(member)
@@ -140,9 +154,19 @@ class TicketsCog(commands.Cog):
                 logger.warning(f"Failed to add {member.id} to ticket {thread.id}: {e}")
                 failed.append(member)
 
-        mentions = ' '.join(m.mention for m in added)
+        for mod in self._mod_members(channel.guild):
+            if mod.id in requested_ids:
+                continue
+            try:
+                await thread.add_user(mod)
+            except discord.HTTPException as e:
+                logger.warning(f"Failed to add mod {mod.id} to ticket {thread.id}: {e}")
+
+        content = self._mod_mention()
+        if added:
+            content += f" | {' '.join(m.mention for m in added)}"
         await thread.send(
-            content=f"{self._mod_mention()} | {mentions}",
+            content=content,
             embed=embed,
             view=TicketControlView(),
             allowed_mentions=discord.AllowedMentions(roles=True, users=True, everyone=False),
@@ -170,7 +194,7 @@ class TicketsCog(commands.Cog):
             await interaction.followup.send('The ticket system is misconfigured. Please contact an admin.', ephemeral=True)
             return
 
-        existing = await self._find_open_ticket(channel, interaction.user.id)
+        existing = self._find_open_ticket(channel, interaction.user.id)
         if existing:
             await interaction.followup.send(f"You already have an open ticket: {existing.mention}", ephemeral=True)
             return
@@ -189,7 +213,7 @@ class TicketsCog(commands.Cog):
         try:
             thread, _ = await self._create_ticket(
                 channel,
-                name=f"{SELF_PREFIX}{interaction.user.name}",
+                name=self._self_ticket_name(interaction.user),
                 members=[interaction.user],
                 embed=embed,
                 opened_by=interaction.user,

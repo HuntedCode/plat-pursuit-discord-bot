@@ -28,7 +28,7 @@ The tradeoff is Discord's **500-channel-per-guild cap**: tickets are deleted on 
 | `ENABLE_TICKETS` | Master toggle | `False` |
 | `TICKET_CHANNEL_ID` | Public channel where the "Open a Ticket" panel lives (panel location only) | (none) |
 | `TICKET_CATEGORY_ID` | Mod-only category where ticket channels are created | (none) |
-| `TICKET_MOD_ROLE_ID` | Mod role allowed to close tickets (and the role you grant category access) | (none) |
+| `TICKET_MOD_ROLE_ID` | Mod role pinged in the channel on self-serve opens, allowed to close tickets, and the role you grant category access | (none) |
 | `TICKET_LOG_CHANNEL_ID` | Mod-only channel where transcripts are posted on close | (none) |
 | `TICKET_ALERT_CHANNEL_ID` | Staff-only channel where an alert embed is posted on open and edited to "closed" on close (no ping) | (none) |
 
@@ -55,7 +55,7 @@ Ticket channels are named by origin: self-serve are `ticket-<username>-<userid>`
 
 1. **Duplicate guard** (self-serve only): scans `TICKET_CATEGORY_ID` for a channel marking this user as owner; if found, links them to it.
 2. Creates a text channel in the category (inherits the mod-only permissions).
-3. Grants each requested member a per-channel overwrite (View / Send / Read History / Attach / Embed) and posts a starter embed with the **Close** button, mentioning the members so they're notified.
+3. Grants each requested member a per-channel overwrite (View / Send / Read History / Attach / Embed) and posts a starter embed with the **Close** button. The starter message mentions the members so they're notified, and **self-serve tickets also ping the mod role** so staff are alerted. The role ping works here (unlike in private threads) because mods can view the channel via the category. Mod-initiated tickets (`/ticket_user`) do not ping the mod role (the acting mod is already present).
 4. Posts an alert to `TICKET_ALERT_CHANNEL_ID` and replies ephemerally to the opener with a link to their channel.
 
 ### Staff alert channel

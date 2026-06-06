@@ -156,13 +156,14 @@ class TicketsCog(commands.Cog):
                 return channel
         return None
 
-    async def _create_ticket(self, category, name, members, embed, opened_by):
+    async def _create_ticket(self, category, name, members, embed, opened_by, ping_mods=False):
         """Create a ticket channel under the mod-only category and grant the members access.
 
         The channel inherits the category's mod-only permissions; each requested member gets a
-        per-user overwrite so they (and staff) can see it. Returns (channel, failed_members).
-        Raises discord.Forbidden / HTTPException if the channel itself cannot be created;
-        granting individual members is best-effort.
+        per-user overwrite so they (and staff) can see it. When ping_mods is set, the starter
+        message pings the mod role (which works here because mods can view the channel via the
+        category). Returns (channel, failed_members). Raises discord.Forbidden / HTTPException
+        if the channel itself cannot be created; granting individual members is best-effort.
         """
         channel = await category.create_text_channel(
             name=name,
@@ -183,12 +184,16 @@ class TicketsCog(commands.Cog):
                 logger.warning(f"Failed to grant {member.id} access to ticket {channel.id}: {e}")
                 failed.append(member)
 
-        content = ' '.join(m.mention for m in added) if added else None
+        mention_parts = []
+        if ping_mods and self.mod_role_id:
+            mention_parts.append(f"<@&{self.mod_role_id}>")
+        mention_parts.extend(m.mention for m in added)
+        content = ' '.join(mention_parts) if mention_parts else None
         await channel.send(
             content=content,
             embed=embed,
             view=TicketControlView(),
-            allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
+            allowed_mentions=discord.AllowedMentions(users=True, roles=ping_mods, everyone=False),
         )
         return channel, failed
 
@@ -236,6 +241,7 @@ class TicketsCog(commands.Cog):
                 members=[interaction.user],
                 embed=embed,
                 opened_by=interaction.user,
+                ping_mods=True,
             )
         except discord.Forbidden:
             logger.error('Bot lacks permission to create a channel in the ticket category.')

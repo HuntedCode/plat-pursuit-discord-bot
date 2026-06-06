@@ -153,7 +153,7 @@ async def setup(bot):
 | `ENABLE_TICKETS` | Toggle the moderation ticket system |
 | `TICKET_CHANNEL_ID` | Public channel where the "Open a Ticket" panel lives (panel location only; tickets are not created here) |
 | `TICKET_CATEGORY_ID` | Mod-only category where ticket channels are created (must grant the bot access) |
-| `TICKET_MOD_ROLE_ID` | Mod role allowed to close tickets (also the role you grant category access to so staff see all tickets) |
+| `TICKET_MOD_ROLE_ID` | Mod role pinged in the channel on self-serve ticket opens, allowed to close tickets, and granted category access so staff see all tickets |
 | `TICKET_LOG_CHANNEL_ID` | Mod-only channel where ticket transcripts are posted on close |
 | `TICKET_ALERT_CHANNEL_ID` | Staff-only channel where an alert embed is posted when a ticket opens and edited to "closed" when it closes (no ping) |
 | `PORT`, `BOT_API_HOST` | FastAPI server configuration |

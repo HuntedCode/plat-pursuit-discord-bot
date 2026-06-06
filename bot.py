@@ -10,12 +10,17 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 import signal
 import hmac
+import uuid
 from urllib.parse import urlparse
 from aiohttp import BasicAuth, ClientSession
 from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO)  # Set to DEBUG for verbose dev
 logger = logging.getLogger(__name__)
+
+# Short id unique to this process, logged on connect so overlapping instances
+# during a deploy are distinguishable in the Render logs.
+INSTANCE_ID = uuid.uuid4().hex[:8]
 
 role_queue = asyncio.Queue()
 role_removal_queue = asyncio.Queue()
@@ -231,7 +236,7 @@ async def admin_x_announce_latest(_=Depends(verify_api_key)):
 
 @bot.event
 async def on_ready():
-    logger.info(f"{bot.user} has connected to Discord! Ready to Pursue Plats!")
+    logger.info(f"{bot.user} has connected to Discord (instance {INSTANCE_ID})! Ready to Pursue Plats!")
     try:
         synced = await bot.tree.sync()
         logger.info(f"Synced {len(synced)} slash commands.")
@@ -279,12 +284,36 @@ removal_worker_task = None
 server_task = None
 server = None
 
+_shutdown_started = False
+
 async def shutdown():
-    logger.info("Shutting down tasks...")
+    # Idempotent: SIGTERM and SIGINT can both arrive, and Render may resend
+    # SIGTERM. Run the teardown exactly once.
+    global _shutdown_started
+    if _shutdown_started:
+        return
+    _shutdown_started = True
+
+    logger.info("Shutting down: closing Discord gateway first.")
+    # Close the gateway cleanly and promptly. Simply cancelling bot.start() does
+    # not guarantee a WebSocket close frame is sent, which leaves a zombie session
+    # alive on Discord's side for ~40s (until heartbeats time out). During a Render
+    # zero-downtime deploy the new container is already connected, so that zombie
+    # window is exactly when duplicate command/event handling happens. bot.close()
+    # sends the close frame immediately so Discord drops the old session right away.
+    try:
+        await asyncio.wait_for(bot.close(), timeout=10)
+    except asyncio.TimeoutError:
+        logger.warning("bot.close() timed out after 10s; cancelling bot task.")
+        if bot_task:
+            bot_task.cancel()
+    except Exception as e:
+        logger.error(f"Error closing bot during shutdown: {e}")
+
+    # Unblock the gather() in main() by stopping the remaining long-lived tasks.
+    # The uvicorn server is torn down via server.shutdown() in main()'s finally.
     if server_task:
         server_task.cancel()
-    if bot_task:
-        bot_task.cancel()
     if worker_task:
         worker_task.cancel()
     if removal_worker_task:
@@ -383,11 +412,12 @@ async def main():
         if removal_worker_task:
             removal_worker_task.cancel()
         await asyncio.sleep(0)
-        if bot.is_ready():
+        # Close only if shutdown() didn't already (e.g. a non-signal exit path).
+        # Guarding on is_closed() avoids depending on the ready flag's side effects.
+        if not bot.is_closed():
             await bot.close()
-        else:
-            if bot_task:
-                bot_task.cancel()
+        elif bot_task:
+            bot_task.cancel()
         if bot.api_session:
             await bot.api_session.close()
         if server:

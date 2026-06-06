@@ -66,7 +66,7 @@ PlatBot/
 │   ├── member_events.py    # Event listener: auto-unlinks PSN profile on member leave (toggle: ENABLE_UNLINK_ON_LEAVE)
 │   ├── audit_log.py        # Event listener: member join/leave logging to audit channel
 │   ├── x_announcements.py  # Background task: polls an X RSS feed and announces new posts to a channel (toggle: ENABLE_X_ANNOUNCEMENTS)
-│   └── tickets.py          # /ticket + panel button (self-serve) and /ticket_user (mod-initiated): private-thread moderation tickets, staff alert-channel notifications, mod-only close, transcript on close (toggle: ENABLE_TICKETS)
+│   └── tickets.py          # /ticket + panel button (self-serve) and /ticket_user (mod-initiated): per-channel moderation tickets in a mod-only category, staff alert-channel notifications, mod-only close (deletes channel after saving transcript) (toggle: ENABLE_TICKETS)
 ├── utils/                  # Shared utilities
 │   └── formatting.py       # Number/string formatters shared across cogs
 ├── scripts/                # Operational CLI helpers (run inside the container via Render shell)
@@ -151,10 +151,11 @@ async def setup(bot):
 | `X_TEST_ANNOUNCEMENT_CHANNEL_ID` | Channel in the admin/testing server, used by `POST /admin/x-announce/test` |
 | `X_TEST_ANNOUNCEMENT_ROLE_ID` | Role in the admin/testing server, used by `POST /admin/x-announce/test` |
 | `ENABLE_TICKETS` | Toggle the moderation ticket system |
-| `TICKET_CHANNEL_ID` | Support channel where the panel lives and private ticket threads are created |
-| `TICKET_MOD_ROLE_ID` | Mod role pinged on new tickets and allowed to close them |
+| `TICKET_CHANNEL_ID` | Public channel where the "Open a Ticket" panel lives (panel location only; tickets are not created here) |
+| `TICKET_CATEGORY_ID` | Mod-only category where ticket channels are created (must grant the bot access) |
+| `TICKET_MOD_ROLE_ID` | Mod role allowed to close tickets (also the role you grant category access to so staff see all tickets) |
 | `TICKET_LOG_CHANNEL_ID` | Mod-only channel where ticket transcripts are posted on close |
-| `TICKET_ALERT_CHANNEL_ID` | Staff-only channel where a pinged alert is posted when a ticket opens and edited to "closed" when it closes |
+| `TICKET_ALERT_CHANNEL_ID` | Staff-only channel where an alert embed is posted when a ticket opens and edited to "closed" when it closes (no ping) |
 | `PORT`, `BOT_API_HOST` | FastAPI server configuration |
 | `PROXY_URL` | Optional outbound proxy |
 | Emoji IDs | Various custom emoji references for rich embeds |

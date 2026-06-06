@@ -7,22 +7,30 @@ import logging
 
 logger = logging.getLogger('psn_api')
 
-# Discord only accepts 60, 1440, 4320, or 10080 for auto-archive. 7 days keeps
-# slow-moving mod conversations from archiving mid-thread.
-TICKET_AUTO_ARCHIVE_MINUTES = 10080
-
 OPEN_CUSTOM_ID = 'ticket:open'
 CLOSE_CUSTOM_ID = 'ticket:close'
 
-# Thread-name prefixes distinguish self-serve tickets from mod-initiated ones so
-# the self-serve duplicate guard never matches a thread a user was pulled into.
+# Channel-name prefixes distinguish self-serve tickets from mod-initiated ones so
+# the self-serve duplicate guard never matches a channel a user was pulled into.
 SELF_PREFIX = 'ticket-'
 MOD_PREFIX = 'modticket-'
 
-# The alert message stashes its thread id in the embed footer so it can be found and
-# edited on close (no DB). The scan window bounds the history lookback on close.
-ALERT_FOOTER_PREFIX = 'Ticket thread ID: '
+# The alert message stashes its ticket-channel id in the embed footer so it can be found
+# and edited on close (no DB). The scan window bounds the history lookback on close.
+ALERT_FOOTER_PREFIX = 'Ticket channel ID: '
 ALERT_SCAN_LIMIT = 200
+
+# Granted to the requesting user(s) on their own ticket channel. The channel otherwise
+# inherits the mod-only category's permissions, so only staff and these users can see it.
+TICKET_MEMBER_OVERWRITE = discord.PermissionOverwrite(
+    view_channel=True,
+    send_messages=True,
+    read_message_history=True,
+    attach_files=True,
+    embed_links=True,
+)
+
+CLOSE_CONFIRM_TIMEOUT = 60
 
 
 class TicketPanelView(discord.ui.View):
@@ -46,7 +54,7 @@ class TicketPanelView(discord.ui.View):
 
 
 class TicketControlView(discord.ui.View):
-    """Persistent controls posted inside each ticket thread."""
+    """Persistent controls posted inside each ticket channel."""
 
     def __init__(self):
         super().__init__(timeout=None)
@@ -65,11 +73,33 @@ class TicketControlView(discord.ui.View):
         await cog.handle_close(interaction)
 
 
+class ConfirmCloseView(discord.ui.View):
+    """Ephemeral confirm/cancel prompt shown before a (destructive) close. Not persistent."""
+
+    def __init__(self, cog, channel: discord.TextChannel):
+        super().__init__(timeout=CLOSE_CONFIRM_TIMEOUT)
+        self.cog = cog
+        self.channel = channel
+
+    @discord.ui.button(label='Confirm Close', style=discord.ButtonStyle.danger, emoji='🔒')
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Acknowledge immediately (the channel is about to be deleted out from under us).
+        await interaction.response.edit_message(content='Closing ticket and saving transcript…', view=None)
+        self.stop()
+        await self.cog.do_close(self.channel, interaction.user)
+
+    @discord.ui.button(label='Cancel', style=discord.ButtonStyle.secondary)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content='Close cancelled.', view=None)
+        self.stop()
+
+
 class TicketsCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.enabled = os.getenv('ENABLE_TICKETS', 'False').lower() == 'true'
         self.channel_id = int(os.getenv('TICKET_CHANNEL_ID', 0))
+        self.category_id = int(os.getenv('TICKET_CATEGORY_ID', 0))
         self.mod_role_id = int(os.getenv('TICKET_MOD_ROLE_ID', 0))
         self.log_channel_id = int(os.getenv('TICKET_LOG_CHANNEL_ID', 0))
         self.alert_channel_id = int(os.getenv('TICKET_ALERT_CHANNEL_ID', 0))
@@ -86,79 +116,81 @@ class TicketsCog(commands.Cog):
             return True
         return False
 
-    def _is_ticket_thread(self, channel) -> bool:
+    def _is_ticket_channel(self, channel) -> bool:
         return (
-            isinstance(channel, discord.Thread)
-            and channel.parent_id == self.channel_id
-            and channel.type == discord.ChannelType.private_thread
+            isinstance(channel, discord.TextChannel)
+            and channel.category_id == self.category_id
+            and (channel.name.startswith(SELF_PREFIX) or channel.name.startswith(MOD_PREFIX))
         )
-
-    def _mod_mention(self) -> str:
-        return f"<@&{self.mod_role_id}>" if self.mod_role_id else 'Moderators'
 
     @staticmethod
     def _self_ticket_name(user) -> str:
         # Owner id is appended so the duplicate guard can identify the opener by name.
         return f"{SELF_PREFIX}{user.name}-{user.id}"
 
-    def _resolve_channel(self):
-        """Return the configured ticket channel, or None if missing/misconfigured."""
+    def _resolve_panel_channel(self):
+        """Return the configured panel channel (where the open button lives), or None."""
         channel = self.bot.get_channel(self.channel_id)
         if not isinstance(channel, discord.TextChannel):
-            logger.error(f"Ticket channel {self.channel_id} not found or not a text channel.")
+            logger.error(f"Ticket panel channel {self.channel_id} not found or not a text channel.")
             return None
         return channel
 
-    def _find_open_ticket(self, channel: discord.TextChannel, user_id: int):
-        """Return the user's existing open *self-serve* ticket, or None. No DB.
+    def _resolve_category(self):
+        """Return the configured mod-only ticket category, or None if missing/misconfigured."""
+        category = self.bot.get_channel(self.category_id)
+        if not isinstance(category, discord.CategoryChannel):
+            logger.error(f"Ticket category {self.category_id} not found or not a category.")
+            return None
+        return category
 
-        Matches on the owner id encoded in the thread name (see _self_ticket_name) rather than
-        membership: mods are members of every ticket, so membership can't identify the owner.
-        Only self-serve threads count, so a user pulled into a mod ticket can still open their own.
+    def _find_open_ticket(self, category: discord.CategoryChannel, user_id: int):
+        """Return the user's existing open *self-serve* ticket channel, or None. No DB.
+
+        Matches on the owner id encoded in the channel name (see _self_ticket_name). Only
+        self-serve channels count, so a user pulled into a mod ticket can still open their own.
         """
         suffix = f"-{user_id}"
-        for thread in channel.threads:
-            if thread.archived or thread.type != discord.ChannelType.private_thread:
-                continue
-            if thread.name.startswith(SELF_PREFIX) and thread.name.endswith(suffix):
-                return thread
+        for channel in category.text_channels:
+            if channel.name.startswith(SELF_PREFIX) and channel.name.endswith(suffix):
+                return channel
         return None
 
-    async def _create_ticket(self, channel, name, members, embed, opened_by):
-        """Create a private ticket thread, pull in members, and post the starter message.
+    async def _create_ticket(self, category, name, members, embed, opened_by):
+        """Create a ticket channel under the mod-only category and grant the members access.
 
-        Returns (thread, failed_members). Raises discord.Forbidden / HTTPException if the
-        thread itself cannot be created; adding individual members is best-effort.
+        The channel inherits the category's mod-only permissions; each requested member gets a
+        per-user overwrite so they (and staff) can see it. Returns (channel, failed_members).
+        Raises discord.Forbidden / HTTPException if the channel itself cannot be created;
+        granting individual members is best-effort.
         """
-        thread = await channel.create_thread(
+        channel = await category.create_text_channel(
             name=name,
-            type=discord.ChannelType.private_thread,
-            invitable=False,
-            auto_archive_duration=TICKET_AUTO_ARCHIVE_MINUTES,
             reason=f"Ticket opened by {opened_by} ({opened_by.id})",
         )
 
-        # Add the requested members (best-effort; a failed add never aborts the ticket).
-        # Mods are NOT added here: they are notified via the staff alert channel and join
-        # a thread by responding to it. See _post_alert.
         added = []
         failed = []
         for member in members:
             try:
-                await thread.add_user(member)
+                await channel.set_permissions(
+                    member,
+                    overwrite=TICKET_MEMBER_OVERWRITE,
+                    reason=f"Ticket access for {member} ({member.id})",
+                )
                 added.append(member)
             except discord.HTTPException as e:
-                logger.warning(f"Failed to add {member.id} to ticket {thread.id}: {e}")
+                logger.warning(f"Failed to grant {member.id} access to ticket {channel.id}: {e}")
                 failed.append(member)
 
         content = ' '.join(m.mention for m in added) if added else None
-        await thread.send(
+        await channel.send(
             content=content,
             embed=embed,
             view=TicketControlView(),
             allowed_mentions=discord.AllowedMentions(users=True, roles=False, everyone=False),
         )
-        return thread, failed
+        return channel, failed
 
     async def handle_open(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -167,8 +199,8 @@ class TicketsCog(commands.Cog):
             await interaction.followup.send('The ticket system is currently disabled.', ephemeral=True)
             return
 
-        if not self.channel_id:
-            logger.warning('Ticket open attempted but TICKET_CHANNEL_ID is not set.')
+        if not self.category_id:
+            logger.warning('Ticket open attempted but TICKET_CATEGORY_ID is not set.')
             await interaction.followup.send('The ticket system is not configured. Please contact an admin.', ephemeral=True)
             return
 
@@ -176,12 +208,12 @@ class TicketsCog(commands.Cog):
             await interaction.followup.send('Tickets can only be opened from within the server.', ephemeral=True)
             return
 
-        channel = self._resolve_channel()
-        if channel is None:
+        category = self._resolve_category()
+        if category is None:
             await interaction.followup.send('The ticket system is misconfigured. Please contact an admin.', ephemeral=True)
             return
 
-        existing = self._find_open_ticket(channel, interaction.user.id)
+        existing = self._find_open_ticket(category, interaction.user.id)
         if existing:
             await interaction.followup.send(f"You already have an open ticket: {existing.mention}", ephemeral=True)
             return
@@ -198,63 +230,59 @@ class TicketsCog(commands.Cog):
         embed.set_footer(text='A moderator will close this ticket once it is resolved.')
 
         try:
-            thread, _ = await self._create_ticket(
-                channel,
+            channel, _ = await self._create_ticket(
+                category,
                 name=self._self_ticket_name(interaction.user),
                 members=[interaction.user],
                 embed=embed,
                 opened_by=interaction.user,
             )
         except discord.Forbidden:
-            logger.error('Bot lacks permission to create private threads in the ticket channel.')
+            logger.error('Bot lacks permission to create a channel in the ticket category.')
             await interaction.followup.send('I lack permission to open a ticket. Please contact an admin.', ephemeral=True)
             return
         except discord.HTTPException as e:
-            logger.error(f"Failed to create ticket thread: {e}")
+            logger.error(f"Failed to create ticket channel: {e}")
             await interaction.followup.send('Could not open a ticket right now. Please try again later.', ephemeral=True)
             return
 
         alert = discord.Embed(
             title='🎫 New Ticket',
             color=0x00ff00,
-            description=f"{interaction.user.mention} opened a ticket.\n{thread.mention}",
+            description=f"{interaction.user.mention} opened a ticket.\n{channel.mention}",
         )
-        await self._post_alert(thread, alert, ping=True)
+        await self._post_alert(channel, alert)
 
-        await interaction.followup.send(f"Your ticket has been created: {thread.mention}", ephemeral=True)
-        logger.info(f"Ticket opened by {interaction.user.id} -> thread {thread.id}")
+        await interaction.followup.send(f"Your ticket has been created: {channel.mention}", ephemeral=True)
+        logger.info(f"Ticket opened by {interaction.user.id} -> channel {channel.id}")
 
     async def handle_close(self, interaction: discord.Interaction):
-        if not self._is_ticket_thread(interaction.channel):
-            await interaction.response.send_message('This can only be used inside a ticket thread.', ephemeral=True)
+        if not self._is_ticket_channel(interaction.channel):
+            await interaction.response.send_message('This can only be used inside a ticket channel.', ephemeral=True)
             return
 
         if not self._is_mod(interaction.user):
             await interaction.response.send_message('Only moderators can close tickets.', ephemeral=True)
             return
 
-        await interaction.response.defer()
-        thread = interaction.channel
-
-        await self._post_transcript(thread, interaction.user)
-        await self._close_alert(thread, interaction.user)
-
-        await thread.send(
-            embed=discord.Embed(
-                title='Ticket Closed',
-                color=0xff5555,
-                description=f"This ticket was closed by {interaction.user.mention}. The thread is now locked.",
-            )
+        await interaction.response.send_message(
+            'Are you sure you want to close and **delete** this ticket? A transcript will be saved to the log channel first.',
+            view=ConfirmCloseView(self, interaction.channel),
+            ephemeral=True,
         )
 
+    async def do_close(self, channel: discord.TextChannel, closer: discord.Member):
+        """Save the transcript, mark the staff alert closed, then delete the ticket channel."""
+        await self._post_transcript(channel, closer)
+        await self._close_alert(channel, closer)
         try:
-            await thread.edit(archived=True, locked=True)
+            await channel.delete(reason=f"Ticket closed by {closer} ({closer.id})")
         except discord.HTTPException as e:
-            logger.error(f"Failed to archive/lock ticket thread {thread.id}: {e}")
+            logger.error(f"Failed to delete ticket channel {channel.id}: {e}")
+            return
+        logger.info(f"Ticket {channel.id} closed and deleted by {closer.id}")
 
-        logger.info(f"Ticket {thread.id} closed by {interaction.user.id}")
-
-    async def _post_transcript(self, thread: discord.Thread, closer: discord.Member):
+    async def _post_transcript(self, channel: discord.TextChannel, closer: discord.Member):
         if not self.log_channel_id:
             return
 
@@ -265,7 +293,7 @@ class TicketsCog(commands.Cog):
 
         lines = []
         try:
-            async for message in thread.history(limit=None, oldest_first=True):
+            async for message in channel.history(limit=None, oldest_first=True):
                 stamp = message.created_at.strftime('%Y-%m-%d %H:%M UTC')
                 author = f"{message.author} ({message.author.id})"
                 content = message.content or ''
@@ -276,26 +304,26 @@ class TicketsCog(commands.Cog):
                     content = '[embed]'
                 lines.append(f"[{stamp}] {author}: {content}")
         except discord.HTTPException as e:
-            logger.error(f"Failed to read history for ticket {thread.id}: {e}")
+            logger.error(f"Failed to read history for ticket {channel.id}: {e}")
             return
 
         transcript = '\n'.join(lines) if lines else 'No messages.'
         buffer = io.BytesIO(transcript.encode('utf-8'))
-        file = discord.File(buffer, filename=f"{thread.name}-{thread.id}.txt")
+        file = discord.File(buffer, filename=f"{channel.name}-{channel.id}.txt")
 
         embed = discord.Embed(
             title='Ticket Transcript',
             color=0x5865F2,
-            description=f"**Thread:** {thread.name} (`{thread.id}`)\n**Closed by:** {closer.mention}\n**Messages:** {len(lines)}",
+            description=f"**Channel:** {channel.name} (`{channel.id}`)\n**Closed by:** {closer.mention}\n**Messages:** {len(lines)}",
         )
         try:
             await log_channel.send(embed=embed, file=file)
         except discord.HTTPException as e:
-            logger.error(f"Failed to post transcript for ticket {thread.id}: {e}")
+            logger.error(f"Failed to post transcript for ticket {channel.id}: {e}")
 
-    async def _post_alert(self, thread: discord.Thread, embed: discord.Embed, ping: bool):
-        """Post a ticket alert to the staff channel. The thread id is stashed in the footer so
-        the alert can be found and edited on close. `ping` controls the mod-role notification."""
+    async def _post_alert(self, ticket_channel: discord.TextChannel, embed: discord.Embed):
+        """Post a ticket alert to the staff channel. The ticket-channel id is stashed in the footer
+        so the alert can be found and edited on close. No ping (the channel itself is the signal)."""
         if not self.alert_channel_id:
             return
         channel = self.bot.get_channel(self.alert_channel_id)
@@ -303,26 +331,21 @@ class TicketsCog(commands.Cog):
             logger.warning(f"Ticket alert channel {self.alert_channel_id} not found; skipping alert.")
             return
 
-        embed.set_footer(text=f"{ALERT_FOOTER_PREFIX}{thread.id}")
-        content = self._mod_mention() if ping else None
+        embed.set_footer(text=f"{ALERT_FOOTER_PREFIX}{ticket_channel.id}")
         try:
-            await channel.send(
-                content=content,
-                embed=embed,
-                allowed_mentions=discord.AllowedMentions(roles=ping, users=False, everyone=False),
-            )
+            await channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
         except discord.HTTPException as e:
-            logger.error(f"Failed to post ticket alert for thread {thread.id}: {e}")
+            logger.error(f"Failed to post ticket alert for channel {ticket_channel.id}: {e}")
 
-    async def _close_alert(self, thread: discord.Thread, closer: discord.Member):
-        """Find this thread's open alert in the staff channel and edit it to a closed state."""
+    async def _close_alert(self, ticket_channel: discord.TextChannel, closer: discord.Member):
+        """Find this ticket's open alert in the staff channel and edit it to a closed state."""
         if not self.alert_channel_id:
             return
         channel = self.bot.get_channel(self.alert_channel_id)
         if not isinstance(channel, discord.TextChannel):
             return
 
-        target = f"{ALERT_FOOTER_PREFIX}{thread.id}"
+        target = f"{ALERT_FOOTER_PREFIX}{ticket_channel.id}"
         try:
             async for msg in channel.history(limit=ALERT_SCAN_LIMIT):
                 if msg.author.id != self.bot.user.id or not msg.embeds:
@@ -337,11 +360,11 @@ class TicketsCog(commands.Cog):
                     value=f"by {closer.mention} {discord.utils.format_dt(discord.utils.utcnow(), 'R')}",
                     inline=False,
                 )
-                await msg.edit(content='Ticket closed.', embed=embed, allowed_mentions=discord.AllowedMentions.none())
+                await msg.edit(embed=embed, allowed_mentions=discord.AllowedMentions.none())
                 return
-            logger.info(f"No open-ticket alert found within last {ALERT_SCAN_LIMIT} messages for thread {thread.id}")
+            logger.info(f"No open-ticket alert found within last {ALERT_SCAN_LIMIT} messages for channel {ticket_channel.id}")
         except discord.HTTPException as e:
-            logger.error(f"Failed to update ticket alert for thread {thread.id}: {e}")
+            logger.error(f"Failed to update ticket alert for channel {ticket_channel.id}: {e}")
 
     @app_commands.command(name='ticket', description='Open a private support ticket with the moderators.')
     async def ticket(self, interaction: discord.Interaction):
@@ -369,12 +392,12 @@ class TicketsCog(commands.Cog):
             await interaction.followup.send('The ticket system is currently disabled.', ephemeral=True)
             return
 
-        if not self.channel_id:
-            await interaction.followup.send('TICKET_CHANNEL_ID is not set.', ephemeral=True)
+        if not self.category_id:
+            await interaction.followup.send('TICKET_CATEGORY_ID is not set.', ephemeral=True)
             return
 
-        channel = self._resolve_channel()
-        if channel is None:
+        category = self._resolve_category()
+        if category is None:
             await interaction.followup.send('The ticket system is misconfigured. Please contact an admin.', ephemeral=True)
             return
 
@@ -405,37 +428,36 @@ class TicketsCog(commands.Cog):
         embed.set_footer(text='A moderator will close this ticket once it is resolved.')
 
         try:
-            thread, failed = await self._create_ticket(
-                channel,
+            channel, failed = await self._create_ticket(
+                category,
                 name=f"{MOD_PREFIX}{user.name}",
                 members=targets,
                 embed=embed,
                 opened_by=interaction.user,
             )
         except discord.Forbidden:
-            logger.error('Bot lacks permission to create private threads in the ticket channel.')
-            await interaction.followup.send('I lack permission to open a ticket. Check my thread permissions.', ephemeral=True)
+            logger.error('Bot lacks permission to create a channel in the ticket category.')
+            await interaction.followup.send('I lack permission to open a ticket. Check my channel permissions.', ephemeral=True)
             return
         except discord.HTTPException as e:
-            logger.error(f"Failed to create mod ticket thread: {e}")
+            logger.error(f"Failed to create mod ticket channel: {e}")
             await interaction.followup.send('Could not open a ticket right now. Please try again later.', ephemeral=True)
             return
 
         alert = discord.Embed(
             title='🎫 New Moderation Ticket',
             color=0xFFA500,
-            description=f"{interaction.user.mention} opened a ticket with {target_mentions}.\n{thread.mention}",
+            description=f"{interaction.user.mention} opened a ticket with {target_mentions}.\n{channel.mention}",
         )
         if reason:
             alert.add_field(name='Reason', value=reason, inline=False)
-        # No ping: the acting mod already knows; this is a log entry for the rest of the team.
-        await self._post_alert(thread, alert, ping=False)
+        await self._post_alert(channel, alert)
 
-        msg = f"Ticket created: {thread.mention}"
+        msg = f"Ticket created: {channel.mention}"
         if failed:
             msg += f"\nCould not add: {', '.join(m.mention for m in failed)}"
         await interaction.followup.send(msg, ephemeral=True)
-        logger.info(f"Mod ticket opened by {interaction.user.id} for {[m.id for m in targets]} -> thread {thread.id}")
+        logger.info(f"Mod ticket opened by {interaction.user.id} for {[m.id for m in targets]} -> channel {channel.id}")
 
     @app_commands.command(name='ticket_panel', description='MODERATOR ONLY: Post the ticket panel in the support channel.')
     @app_commands.default_permissions(manage_messages=True)
@@ -446,9 +468,9 @@ class TicketsCog(commands.Cog):
             await interaction.followup.send('TICKET_CHANNEL_ID is not set.', ephemeral=True)
             return
 
-        channel = self._resolve_channel()
+        channel = self._resolve_panel_channel()
         if channel is None:
-            await interaction.followup.send('The configured ticket channel could not be found.', ephemeral=True)
+            await interaction.followup.send('The configured panel channel could not be found.', ephemeral=True)
             return
 
         embed = discord.Embed(
@@ -465,7 +487,7 @@ class TicketsCog(commands.Cog):
         try:
             await channel.send(embed=embed, view=TicketPanelView())
         except discord.Forbidden:
-            await interaction.followup.send('I lack permission to post in the ticket channel.', ephemeral=True)
+            await interaction.followup.send('I lack permission to post in the panel channel.', ephemeral=True)
             return
 
         await interaction.followup.send(f"Ticket panel posted in {channel.mention}.", ephemeral=True)

@@ -66,7 +66,7 @@ PlatBot/
 │   ├── member_events.py    # Event listener: auto-unlinks PSN profile on member leave (toggle: ENABLE_UNLINK_ON_LEAVE)
 │   ├── audit_log.py        # Event listener: member join/leave logging to audit channel
 │   ├── x_announcements.py  # Background task: polls an X RSS feed and announces new posts to a channel (toggle: ENABLE_X_ANNOUNCEMENTS)
-│   └── tickets.py          # /ticket + panel button: private-thread moderation tickets, mod-only close, transcript on close (toggle: ENABLE_TICKETS)
+│   └── tickets.py          # /ticket + panel button (self-serve) and /ticket_user (mod-initiated): private-thread moderation tickets, mod-only close, transcript on close (toggle: ENABLE_TICKETS)
 ├── utils/                  # Shared utilities
 │   └── formatting.py       # Number/string formatters shared across cogs
 ├── scripts/                # Operational CLI helpers (run inside the container via Render shell)

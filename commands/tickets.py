@@ -14,6 +14,11 @@ TICKET_AUTO_ARCHIVE_MINUTES = 10080
 OPEN_CUSTOM_ID = 'ticket:open'
 CLOSE_CUSTOM_ID = 'ticket:close'
 
+# Thread-name prefixes distinguish self-serve tickets from mod-initiated ones so
+# the self-serve duplicate guard never matches a thread a user was pulled into.
+SELF_PREFIX = 'ticket-'
+MOD_PREFIX = 'modticket-'
+
 
 class TicketPanelView(discord.ui.View):
     """Persistent panel posted in the support channel. Re-registered on startup."""
@@ -82,10 +87,26 @@ class TicketsCog(commands.Cog):
             and channel.type == discord.ChannelType.private_thread
         )
 
+    def _mod_mention(self) -> str:
+        return f"<@&{self.mod_role_id}>" if self.mod_role_id else 'Moderators'
+
+    def _resolve_channel(self):
+        """Return the configured ticket channel, or None if missing/misconfigured."""
+        channel = self.bot.get_channel(self.channel_id)
+        if not isinstance(channel, discord.TextChannel):
+            logger.error(f"Ticket channel {self.channel_id} not found or not a text channel.")
+            return None
+        return channel
+
     async def _find_open_ticket(self, channel: discord.TextChannel, user_id: int):
-        """Return the user's existing open ticket thread, or None. No DB: scan active threads."""
+        """Return the user's existing open *self-serve* ticket, or None. No DB: scan active threads.
+
+        Only self-serve threads count, so a user pulled into a mod ticket can still open their own.
+        """
         for thread in channel.threads:
             if thread.archived or thread.type != discord.ChannelType.private_thread:
+                continue
+            if not thread.name.startswith(SELF_PREFIX):
                 continue
             try:
                 members = await thread.fetch_members()
@@ -94,6 +115,39 @@ class TicketsCog(commands.Cog):
             if any(m.id == user_id for m in members):
                 return thread
         return None
+
+    async def _create_ticket(self, channel, name, members, embed, opened_by):
+        """Create a private ticket thread, pull in members, and post the starter message.
+
+        Returns (thread, failed_members). Raises discord.Forbidden / HTTPException if the
+        thread itself cannot be created; adding individual members is best-effort.
+        """
+        thread = await channel.create_thread(
+            name=name,
+            type=discord.ChannelType.private_thread,
+            invitable=False,
+            auto_archive_duration=TICKET_AUTO_ARCHIVE_MINUTES,
+            reason=f"Ticket opened by {opened_by} ({opened_by.id})",
+        )
+
+        failed = []
+        added = []
+        for member in members:
+            try:
+                await thread.add_user(member)
+                added.append(member)
+            except discord.HTTPException as e:
+                logger.warning(f"Failed to add {member.id} to ticket {thread.id}: {e}")
+                failed.append(member)
+
+        mentions = ' '.join(m.mention for m in added)
+        await thread.send(
+            content=f"{self._mod_mention()} | {mentions}",
+            embed=embed,
+            view=TicketControlView(),
+            allowed_mentions=discord.AllowedMentions(roles=True, users=True, everyone=False),
+        )
+        return thread, failed
 
     async def handle_open(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
@@ -111,9 +165,8 @@ class TicketsCog(commands.Cog):
             await interaction.followup.send('Tickets can only be opened from within the server.', ephemeral=True)
             return
 
-        channel = self.bot.get_channel(self.channel_id)
-        if not isinstance(channel, discord.TextChannel):
-            logger.error(f"Ticket channel {self.channel_id} not found or not a text channel.")
+        channel = self._resolve_channel()
+        if channel is None:
             await interaction.followup.send('The ticket system is misconfigured. Please contact an admin.', ephemeral=True)
             return
 
@@ -122,25 +175,6 @@ class TicketsCog(commands.Cog):
             await interaction.followup.send(f"You already have an open ticket: {existing.mention}", ephemeral=True)
             return
 
-        try:
-            thread = await channel.create_thread(
-                name=f"ticket-{interaction.user.name}",
-                type=discord.ChannelType.private_thread,
-                invitable=False,
-                auto_archive_duration=TICKET_AUTO_ARCHIVE_MINUTES,
-                reason=f"Support ticket opened by {interaction.user} ({interaction.user.id})",
-            )
-            await thread.add_user(interaction.user)
-        except discord.Forbidden:
-            logger.error('Bot lacks permission to create private threads in the ticket channel.')
-            await interaction.followup.send('I lack permission to open a ticket. Please contact an admin.', ephemeral=True)
-            return
-        except discord.HTTPException as e:
-            logger.error(f"Failed to create ticket thread: {e}")
-            await interaction.followup.send('Could not open a ticket right now. Please try again later.', ephemeral=True)
-            return
-
-        mod_mention = f"<@&{self.mod_role_id}>" if self.mod_role_id else 'Moderators'
         embed = discord.Embed(
             title=f"Support Ticket {self.bot.plat_pursuit_emoji}",
             color=0x00ff00,
@@ -152,12 +186,22 @@ class TicketsCog(commands.Cog):
         )
         embed.set_footer(text='A moderator will close this ticket once it is resolved.')
 
-        await thread.send(
-            content=f"{mod_mention} | {interaction.user.mention}",
-            embed=embed,
-            view=TicketControlView(),
-            allowed_mentions=discord.AllowedMentions(roles=True, users=True, everyone=False),
-        )
+        try:
+            thread, _ = await self._create_ticket(
+                channel,
+                name=f"{SELF_PREFIX}{interaction.user.name}",
+                members=[interaction.user],
+                embed=embed,
+                opened_by=interaction.user,
+            )
+        except discord.Forbidden:
+            logger.error('Bot lacks permission to create private threads in the ticket channel.')
+            await interaction.followup.send('I lack permission to open a ticket. Please contact an admin.', ephemeral=True)
+            return
+        except discord.HTTPException as e:
+            logger.error(f"Failed to create ticket thread: {e}")
+            await interaction.followup.send('Could not open a ticket right now. Please try again later.', ephemeral=True)
+            return
 
         await interaction.followup.send(f"Your ticket has been created: {thread.mention}", ephemeral=True)
         logger.info(f"Ticket opened by {interaction.user.id} -> thread {thread.id}")
@@ -234,6 +278,86 @@ class TicketsCog(commands.Cog):
     async def ticket(self, interaction: discord.Interaction):
         await self.handle_open(interaction)
 
+    @app_commands.command(name='ticket_user', description='MODERATOR ONLY: Open a private ticket and pull a user (or up to 3) into it.')
+    @app_commands.default_permissions(manage_messages=True)
+    @app_commands.describe(
+        user='The user to pull into the ticket.',
+        reason='Optional reason shown in the ticket.',
+        user2='Optional second user to pull in.',
+        user3='Optional third user to pull in.',
+    )
+    async def ticket_user(
+        self,
+        interaction: discord.Interaction,
+        user: discord.Member,
+        reason: str | None = None,
+        user2: discord.Member | None = None,
+        user3: discord.Member | None = None,
+    ):
+        await interaction.response.defer(ephemeral=True)
+
+        if not self.enabled:
+            await interaction.followup.send('The ticket system is currently disabled.', ephemeral=True)
+            return
+
+        if not self.channel_id:
+            await interaction.followup.send('TICKET_CHANNEL_ID is not set.', ephemeral=True)
+            return
+
+        channel = self._resolve_channel()
+        if channel is None:
+            await interaction.followup.send('The ticket system is misconfigured. Please contact an admin.', ephemeral=True)
+            return
+
+        # Dedupe by id, preserve order, drop bots.
+        targets = []
+        seen = set()
+        for member in (user, user2, user3):
+            if member is None or member.bot or member.id in seen:
+                continue
+            seen.add(member.id)
+            targets.append(member)
+
+        if not targets:
+            await interaction.followup.send('No valid users to add (bots cannot be pulled into tickets).', ephemeral=True)
+            return
+
+        target_mentions = ', '.join(m.mention for m in targets)
+        embed = discord.Embed(
+            title=f"Moderation Ticket {self.bot.plat_pursuit_emoji}",
+            color=0xFFA500,
+            description=(
+                f"{interaction.user.mention} (moderator) opened this ticket and pulled in {target_mentions}.\n\n"
+                "This is a private conversation with the staff team."
+            ),
+        )
+        if reason:
+            embed.add_field(name='Reason', value=reason, inline=False)
+        embed.set_footer(text='A moderator will close this ticket once it is resolved.')
+
+        try:
+            thread, failed = await self._create_ticket(
+                channel,
+                name=f"{MOD_PREFIX}{user.name}",
+                members=targets,
+                embed=embed,
+                opened_by=interaction.user,
+            )
+        except discord.Forbidden:
+            logger.error('Bot lacks permission to create private threads in the ticket channel.')
+            await interaction.followup.send('I lack permission to open a ticket. Check my thread permissions.', ephemeral=True)
+            return
+        except discord.HTTPException as e:
+            logger.error(f"Failed to create mod ticket thread: {e}")
+            await interaction.followup.send('Could not open a ticket right now. Please try again later.', ephemeral=True)
+            return
+
+        msg = f"Ticket created: {thread.mention}"
+        if failed:
+            msg += f"\nCould not add: {', '.join(m.mention for m in failed)}"
+        await interaction.followup.send(msg, ephemeral=True)
+        logger.info(f"Mod ticket opened by {interaction.user.id} for {[m.id for m in targets]} -> thread {thread.id}")
+
     @app_commands.command(name='ticket_panel', description='MODERATOR ONLY: Post the ticket panel in the support channel.')
     @app_commands.default_permissions(manage_messages=True)
     async def ticket_panel(self, interaction: discord.Interaction):
@@ -243,8 +367,8 @@ class TicketsCog(commands.Cog):
             await interaction.followup.send('TICKET_CHANNEL_ID is not set.', ephemeral=True)
             return
 
-        channel = self.bot.get_channel(self.channel_id)
-        if not isinstance(channel, discord.TextChannel):
+        channel = self._resolve_channel()
+        if channel is None:
             await interaction.followup.send('The configured ticket channel could not be found.', ephemeral=True)
             return
 

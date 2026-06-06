@@ -32,15 +32,24 @@ If the toggle is on but `TICKET_CHANNEL_ID` is missing, opening a ticket fails w
 
 ### Entry points
 
-- **`/ticket`** slash command, usable anywhere in the server.
+- **`/ticket`** slash command, usable anywhere in the server (self-serve).
 - **A persistent panel**: an embed with an "Open a Ticket" button. A mod posts it with **`/ticket_panel`** (mod-only, gated by `manage_messages`), which drops the panel into `TICKET_CHANNEL_ID`.
+- **`/ticket_user`** (mod-only): a moderator opens a ticket and **pulls in** a target user, plus up to two more (`user2`, `user3`), with an optional `reason`. Used to start a staff-driven conversation rather than waiting for the member to reach out.
 
-Both routes call the same `handle_open` logic.
+The self-serve routes call the shared `handle_open` logic; both flows ultimately build a thread through the shared `_create_ticket` helper.
+
+### Self-serve vs mod-initiated, and the name-prefix invariant
+
+Threads are named by origin: self-serve tickets are `ticket-<username>`, mod-initiated tickets are `modticket-<username>`. This matters because the duplicate guard keys on thread *membership*, not on who opened it. Without the distinction, a user pulled into a mod ticket would be treated as already having an open ticket and blocked from using `/ticket`.
+
+So the rules are:
+- **Self-serve (`/ticket`)** enforces one open ticket per user, but the duplicate scan only considers `ticket-` threads. A user pulled into a `modticket-` thread can still open their own.
+- **Mod-initiated (`/ticket_user`)** never deduplicates: each invocation creates a fresh `modticket-` thread, even if the target already has tickets open. Bots passed as targets are skipped; if a target can't be added (e.g. they left), the thread is still created and the mod is told who was missed.
 
 ### Opening a ticket
 
 1. **Duplicate guard** (no DB): scans the support channel's active (non-archived) private threads and checks membership via `fetch_members`. If the user already has an open ticket, they get a link to it instead of a second thread.
-2. Creates a private thread named `ticket-{username}` in `TICKET_CHANNEL_ID` with `invitable=False` (members added to a ticket can't pull in others) and a 7-day auto-archive.
+2. Creates a private thread named `ticket-<username>` in `TICKET_CHANNEL_ID` with `invitable=False` (members added to a ticket can't pull in others) and a 7-day auto-archive.
 3. Adds the opener, posts a starter embed, and pings `TICKET_MOD_ROLE_ID` + the opener via scoped `allowed_mentions` (role + user only, never @everyone).
 4. Replies ephemerally to the opener with a link to their new thread.
 

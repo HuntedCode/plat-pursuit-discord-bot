@@ -6,7 +6,8 @@
 
 **PlatBot** is the Discord bot companion to PlatPursuit. It bridges the PlatPursuit web platform with Discord communities, enabling PSN account linking, trophy data display, role synchronization based on achievements, and community engagement features.
 
-- **Relationship to PlatPursuit**: PlatBot is a consumer of PlatPursuit's API. It does not have its own database. All persistent data lives in PlatPursuit's backend. Changes to PlatPursuit's API endpoints, data models, or authentication may require corresponding updates here.
+- **Relationship to PlatPursuit**: PlatBot is a consumer of PlatPursuit's API. PlatPursuit owns all trophy/user data, which PlatBot reads via the API. Changes to PlatPursuit's API endpoints, data models, or authentication may require corresponding updates here.
+- **Own database (bot-owned data only)**: PlatBot has a small SQLAlchemy-backed database for data it owns itself (currently moderation notes), so it can stand on its own. It currently shares PlatPursuit's Postgres instance using clearly prefixed (`platbot_`) tables that PlatBot manages exclusively; the engine is configured via `DATABASE_URL` and is portable (Postgres in prod, SQLite for local dev). PlatPursuit-owned data still comes from the API, not this database.
 - **Deployment**: Docker containerized (Python 3.12, multi-stage build)
 
 ---
@@ -20,6 +21,7 @@
 | Web Server        | FastAPI + Uvicorn (webhook receiver) |
 | HTTP Client       | aiohttp (async API calls)           |
 | Validation        | Pydantic                            |
+| Database (ORM)    | SQLAlchemy 2.0 (async); asyncpg (Postgres) / aiosqlite (dev) |
 | Configuration     | python-dotenv (.env files)          |
 | Containerization  | Docker                              |
 
@@ -42,6 +44,10 @@ PlatBot runs two services in the same process:
 ### Worker Queue System
 
 Role assignments and removals use async worker queues with retry logic and rate-limit handling. This prevents Discord API rate limit issues when processing bulk role changes (e.g., after a badge evaluation sweep).
+
+### Database
+
+PlatBot owns a small SQLAlchemy (async) database for bot-owned data (currently moderation notes). The engine is created at startup from `DATABASE_URL` and exposed as `bot.db_sessionmaker` for cogs (`async with bot.db_sessionmaker() as session:`), mirroring how `bot.api_session` is shared. It currently points at PlatPursuit's Postgres, using `platbot_`-prefixed tables managed only by PlatBot's SQLAlchemy metadata (`create_all` with `checkfirst`, so Django's tables are never touched). The URL is engine-agnostic: `postgresql://`/`postgres://` forms are auto-converted to the asyncpg driver (with `sslmode` handled for Render), and `sqlite+aiosqlite://` works for local dev. If `DATABASE_URL` is unset, DB-backed features degrade gracefully (cogs check `bot.db_sessionmaker`). Schema changes are currently applied via `create_all`; introduce Alembic when the schema grows.
 
 ---
 
@@ -66,7 +72,11 @@ PlatBot/
 │   ├── member_events.py    # Event listener: auto-unlinks PSN profile on member leave (toggle: ENABLE_UNLINK_ON_LEAVE)
 │   ├── audit_log.py        # Event listener: member join/leave logging to audit channel
 │   ├── x_announcements.py  # Background task: polls an X RSS feed and announces new posts to a channel (toggle: ENABLE_X_ANNOUNCEMENTS)
-│   └── tickets.py          # /ticket + panel button (self-serve) and /ticket_user (mod-initiated): per-channel moderation tickets in a mod-only category, staff alert-channel notifications, mod-only close (deletes channel after saving transcript) (toggle: ENABLE_TICKETS)
+│   ├── tickets.py          # /ticket + panel button (self-serve) and /ticket_user (mod-initiated): per-channel moderation tickets in a mod-only category, staff alert-channel notifications, mod-only close (deletes channel after saving transcript) (toggle: ENABLE_TICKETS)
+│   └── notes.py            # /note add|view: mod-only per-user moderation notes (append-only, dated + attributed), stored in the database
+├── db/                     # SQLAlchemy (async) persistence layer for bot-owned data
+│   ├── models.py           # Declarative Base + ModNote model (platbot_mod_notes table)
+│   └── engine.py           # Engine/session factory + DATABASE_URL normalization (init_db)
 ├── utils/                  # Shared utilities
 │   └── formatting.py       # Number/string formatters shared across cogs
 ├── scripts/                # Operational CLI helpers (run inside the container via Render shell)
@@ -156,6 +166,7 @@ async def setup(bot):
 | `TICKET_MOD_ROLE_ID` | Mod role pinged in the channel on self-serve ticket opens, allowed to close tickets, and granted category access so staff see all tickets |
 | `TICKET_LOG_CHANNEL_ID` | Mod-only channel where ticket transcripts are posted on close |
 | `TICKET_ALERT_CHANNEL_ID` | Staff-only channel where an alert embed is posted when a ticket opens and edited to "closed" when it closes (no ping) |
+| `DATABASE_URL` | SQLAlchemy connection URL for bot-owned data (mod notes). Accepts `postgres://`/`postgresql://` (converted to asyncpg) or `sqlite+aiosqlite://`. Unset = DB features disabled |
 | `PORT`, `BOT_API_HOST` | FastAPI server configuration |
 | `PROXY_URL` | Optional outbound proxy |
 | Emoji IDs | Various custom emoji references for rich embeds |
@@ -164,13 +175,14 @@ async def setup(bot):
 
 ## Git Commit Scopes
 
-Scopes for this project: `commands`, `api`, `roles`, `embeds`, `config`, `docker`
+Scopes for this project: `commands`, `api`, `roles`, `embeds`, `config`, `docker`, `db`
 
 ---
 
 ## Important Gotchas
 
 - **Rate limiting**: Discord aggressively rate-limits role operations. Always use the worker queue system in `bot.py` rather than making direct role assignment calls.
-- **API dependency**: PlatBot has no local database. If the PlatPursuit API is down, all data-dependent commands will fail. Commands should handle API errors gracefully with user-friendly messages.
+- **API dependency**: PlatBot reads all trophy/user data from the PlatPursuit API. If the API is down, those data-dependent commands will fail. Commands should handle API errors gracefully with user-friendly messages. (Bot-owned data like mod notes lives in PlatBot's own database, see below, and is independent of the API.)
+- **Shared database**: PlatBot's database currently shares PlatPursuit's Postgres. PlatBot only ever touches its own `platbot_`-prefixed tables (via SQLAlchemy `create_all`), never Django's. Do not add PlatBot tables to PlatPursuit's Django models, and do not point Django migrations at the `platbot_` tables. If `DATABASE_URL` is unset, DB-backed cogs degrade gracefully rather than crashing.
 - **Emoji IDs**: Custom Discord emojis are server-specific. Emoji ID environment variables must be updated if the bot moves to a different server or emojis are recreated.
 - **Slash command sync**: After adding/modifying commands, Discord may take up to an hour to propagate slash command changes globally. Use guild-specific sync during development for instant updates.

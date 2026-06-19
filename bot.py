@@ -14,6 +14,7 @@ import uuid
 from urllib.parse import urlparse
 from aiohttp import BasicAuth, ClientSession
 from pydantic import BaseModel
+from db.engine import init_db
 
 logging.basicConfig(level=logging.INFO)  # Set to DEBUG for verbose dev
 logger = logging.getLogger(__name__)
@@ -133,6 +134,7 @@ load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 API_BASE_URL = os.getenv('API_BASE_URL')
 API_KEY = os.getenv('API_KEY')
+DATABASE_URL = os.getenv('DATABASE_URL')
 
 PLAT_PURSUIT_EMOJI_ID = os.getenv('PLAT_PURSUIT_EMOJI_ID')
 PLATINUM_EMOJI_ID = os.getenv('PLATINUM_EMOJI_ID')
@@ -164,6 +166,8 @@ bot.api_base_url = API_BASE_URL
 bot.api_key = API_KEY
 bot.api_headers = {'Authorization': f"Token {API_KEY}"}
 bot.api_session = None
+bot.db_engine = None
+bot.db_sessionmaker = None
 bot.verified_role_id = int(os.getenv('VERIFIED_ROLE_ID', 0))
 
 bot.plat_pursuit_emoji = f"<:PlatPursuit:{PLAT_PURSUIT_EMOJI_ID}>" if PLAT_PURSUIT_EMOJI_ID else "🏆"
@@ -270,6 +274,8 @@ async def load_extensions():
         'commands.x_announcements',
 
         'commands.tickets',
+
+        'commands.notes',
     ]
     for ext in extensions:
         try:
@@ -348,6 +354,15 @@ async def main():
 
     bot.api_session = ClientSession(headers=bot.api_headers)
 
+    if DATABASE_URL:
+        try:
+            bot.db_engine, bot.db_sessionmaker = await init_db(DATABASE_URL)
+        except Exception as e:
+            logger.error(f"Failed to initialize database: {e}")
+            bot.db_engine = bot.db_sessionmaker = None
+    else:
+        logger.warning("DATABASE_URL not set; database-backed features (mod notes) are disabled.")
+
     bot_task = None
     worker_task = asyncio.create_task(role_assignment_worker())
     removal_worker_task = asyncio.create_task(role_removal_worker())
@@ -420,6 +435,8 @@ async def main():
             bot_task.cancel()
         if bot.api_session:
             await bot.api_session.close()
+        if bot.db_engine:
+            await bot.db_engine.dispose()
         if server:
             await server.shutdown()
 

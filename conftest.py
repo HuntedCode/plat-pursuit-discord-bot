@@ -68,8 +68,8 @@ async def db_sessionmaker(tmp_path):
     await engine.dispose()
 
 
-@pytest.fixture
-def notes_bot(db_sessionmaker):
+@pytest_asyncio.fixture
+async def notes_bot(db_sessionmaker):
     """A minimal bot object exposing db_sessionmaker for the notes cog."""
     bot = MagicMock(name='Bot')
     bot.db_sessionmaker = db_sessionmaker

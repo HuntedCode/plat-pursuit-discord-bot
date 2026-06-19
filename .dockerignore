@@ -11,3 +11,7 @@ staticfiles/
 media/
 .git/
 .gitignore
+tests/
+conftest.py
+requirements-dev.txt
+.pytest_cache/

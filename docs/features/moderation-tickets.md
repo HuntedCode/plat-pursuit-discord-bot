@@ -10,7 +10,7 @@ Toggle via `ENABLE_TICKETS`. Off by default.
 
 ## Why channels in a mod-only category (and not threads or a database)
 
-PlatBot has no local database, and ticket state (owner, status, history) lives entirely in Discord.
+Tickets deliberately do not use PlatBot's database; ticket state (owner, status, history) lives entirely in Discord (the channel itself, plus the transcript saved to the log channel on close). This keeps tickets lightweight and resilient. (PlatBot does have a database now, but only for bot-owned records like mod notes.)
 
 This used to use private threads, but private threads have unreliable visibility: even with *Manage Threads*, mods often can't see or list private threads they aren't members of, which defeated the "whole team can help" goal. **Channels have predictable, inheritable permissions**, so they solve that cleanly:
 

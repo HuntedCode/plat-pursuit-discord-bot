@@ -38,13 +38,13 @@ async def init_db(database_url: str):
     """Create the async engine, ensure PlatBot's tables exist, and return (engine, sessionmaker).
 
     `create_all` only touches tables in this package's metadata (checkfirst=True), so it is safe
-    against a database shared with PlatPursuit: it never sees or alters Django's tables.
+    and idempotent: it creates missing tables and never alters existing ones.
     """
     url, connect_args = _normalize_url(database_url)
     engine = create_async_engine(url, connect_args=connect_args, pool_pre_ping=True)
     async with engine.begin() as conn:
         # checkfirst=True (explicit): only create tables in this metadata that are missing,
-        # never alter existing ones. This is what keeps a shared database safe.
+        # never alter existing ones (safe and idempotent across restarts).
         await conn.run_sync(lambda sync_conn: Base.metadata.create_all(sync_conn, checkfirst=True))
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
     logger.info("Database initialized.")

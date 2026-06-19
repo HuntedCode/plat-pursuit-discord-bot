@@ -12,8 +12,9 @@ class ModNote(Base):
     """A moderator note recorded against a Discord user.
 
     Append-only by design: notes are never edited, so the (author, timestamp) pair is a
-    trustworthy blame/audit trail. The table is prefixed `platbot_` so it coexists safely
-    in a database shared with PlatPursuit's Django tables; PlatBot owns it exclusively.
+    trustworthy blame/audit trail. Lives in PlatBot's own dedicated database; the `platbot_`
+    table prefix is a harmless naming convention (and keeps things unambiguous if the DB is
+    ever consolidated with another service).
     """
 
     __tablename__ = 'platbot_mod_notes'

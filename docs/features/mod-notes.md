@@ -23,7 +23,7 @@ The notes need real persistence (survive restarts), per-user keying, and durable
 
 - **ORM**: SQLAlchemy 2.0 async. The engine is created at startup from `DATABASE_URL` and exposed as `bot.db_sessionmaker` (mirroring `bot.api_session`).
 - **Engine-agnostic**: the same code runs on Postgres (`postgresql://` / `postgres://`, auto-converted to the asyncpg driver) or SQLite (`sqlite+aiosqlite://`) for local dev. `init_db` also handles `sslmode` in the URL (translated to an asyncpg connect arg) so Render/Heroku-style URLs work.
-- **Shared DB, isolated table**: currently points at PlatPursuit's Postgres. PlatBot's table is `platbot_mod_notes`, created and managed only by PlatBot's SQLAlchemy metadata (`create_all` with `checkfirst`), so it never collides with or alters Django's tables.
+- **Dedicated database**: PlatBot uses its own Postgres instance (separate from PlatPursuit). The table is `platbot_mod_notes`, created and managed by PlatBot's SQLAlchemy metadata (`create_all` with `checkfirst`). The `platbot_` prefix is a harmless naming convention.
 
 ### Schema (`platbot_mod_notes`)
 
@@ -55,7 +55,7 @@ No bot-specific Discord permissions are needed beyond the ability to respond to 
 
 ## Gotchas and Pitfalls
 
-- **Shared Postgres, PlatBot-owned table.** PlatBot only manages `platbot_`-prefixed tables. Never register these in PlatPursuit's Django models or point Django migrations at them, and never have PlatBot write to Django's tables.
+- **Dedicated database.** PlatBot uses its own Postgres, separate from PlatPursuit. The `platbot_` table prefix is just a convention now (it would keep things unambiguous if the DB were ever consolidated with another service).
 - **Append-only by design.** There is intentionally no edit/delete in v1 so the author/timestamp trail stays trustworthy. If a remove is added later, log the removal so it stays "in the open."
 - **`DATABASE_URL` driver/scheme.** `init_db` converts `postgres://`/`postgresql://` to `postgresql+asyncpg://` and strips libpq-only query params (`sslmode`, `channel_binding`) that asyncpg rejects, translating `sslmode` into an SSL connect arg. If you hit SSL errors, check whether you're using the internal vs external Postgres host.
 - **View is bounded by an embed-size budget**, not a hard note cap: very long histories show only the most recent that fit (the footer says so). Raise `VIEW_CHAR_BUDGET` / add pagination if needed.

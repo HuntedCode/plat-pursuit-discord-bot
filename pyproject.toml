@@ -1,0 +1,11 @@
+# PlatBot is deployed via requirements.txt (no packaging); this file currently
+# only holds tooling config. Test deps live in requirements-dev.txt.
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+python_files = ["test_*.py", "*_test.py"]
+testpaths = ["tests"]
+# venv ships its own test_*.py files; never descend into it.
+norecursedirs = ["venv", ".git", "static", "__pycache__"]
+addopts = "-q --strict-markers"

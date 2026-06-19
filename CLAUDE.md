@@ -173,9 +173,27 @@ async def setup(bot):
 
 ---
 
+## Testing
+
+Tests use **pytest** + **pytest-asyncio**, mirroring the ecosystem convention (config in `pyproject.toml` `[tool.pytest.ini_options]`, dev deps in `requirements-dev.txt`, shared fixtures in root `conftest.py`).
+
+```bash
+pip install -r requirements-dev.txt   # pulls -r requirements.txt + test deps
+pytest                                  # run the suite
+```
+
+- **Where**: tests live in `tests/`; shared fixtures (FakeUser, mock-interaction factory, in-memory DB sessionmaker, API-bot) are in `conftest.py`.
+- **Async**: `asyncio_mode = "auto"`, so `async def test_*` and async fixtures need no per-test decorator.
+- **Discord boundary**: Discord interactions are mocked with `AsyncMock` (no live gateway). Cog command bodies are invoked directly via `Cog.command.callback(cog, interaction, ...)`.
+- **HTTP boundary**: outbound PlatPursuit API calls (aiohttp) are mocked with `aioresponses` (see `tests/test_refresh.py` for the pattern). This is how to test the API-consuming cogs.
+- **Database**: DB tests run against a per-test temp SQLite file through the real `init_db`, so the SQLAlchemy models/queries are exercised for real.
+- **Coverage today**: db engine + models, notes cog (DB integration), ticket pure-logic helpers, X-announce filters, formatting, and one boundary-mocked API cog. **Extending**: API cogs follow the `test_refresh.py` aioresponses pattern; deeper Discord-interaction flows build on the `conftest.py` mocks. The bar is "no new logic without a committed test."
+
+---
+
 ## Git Commit Scopes
 
-Scopes for this project: `commands`, `api`, `roles`, `embeds`, `config`, `docker`, `db`
+Scopes for this project: `commands`, `api`, `roles`, `embeds`, `config`, `docker`, `db`, `test`
 
 ---
 

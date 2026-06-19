@@ -75,7 +75,9 @@ class NotesCog(commands.Cog):
                 result = await session.execute(
                     select(ModNote)
                     .where(ModNote.guild_id == interaction.guild_id, ModNote.target_user_id == user.id)
-                    .order_by(ModNote.created_at.desc())
+                    # id is the tiebreaker so ordering stays deterministic when two notes share
+                    # a timestamp (e.g. SQLite's second-resolution now()).
+                    .order_by(ModNote.created_at.desc(), ModNote.id.desc())
                 )
                 notes = result.scalars().all()
 

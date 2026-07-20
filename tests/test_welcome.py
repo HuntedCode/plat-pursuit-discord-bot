@@ -62,7 +62,7 @@ async def test_verified_welcome_announces_mention_and_psn(welcome_env):
     assert content == 'Welcome <@42>!'
     assert '<@42>' in embed.description
     assert 'CoolPSN' in embed.description
-    assert '/trophy_case' in embed.fields[0].value
+    assert '/refresh' in embed.fields[0].value
 
 
 async def test_verified_welcome_posts_to_its_own_channel(welcome_env):

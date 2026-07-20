@@ -87,7 +87,7 @@ class WelcomeCog(commands.Cog):
             name="Now that you're verified",
             value=(
                 f"{self.bot.platinum_emoji} **/summary** - your trophy progress at a glance\n"
-                f"{self.bot.gold_emoji} **/trophy_case** - show off your platinums\n"
+                f"{self.bot.gold_emoji} **/refresh** - pull in your latest trophies (once per hour)\n"
                 f"{self.bot.silver_emoji} **/trophystats** - see what the community earned today\n\n"
                 'Say hi and tell us what you are chasing right now!'
             ),

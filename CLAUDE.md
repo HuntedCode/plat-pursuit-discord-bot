@@ -66,6 +66,7 @@ PlatBot/
 │   ├── sync_roles.py       # /sync-roles: manually sync achievement roles
 │   ├── sync_roles_user.py  # /sync_roles_user: mod command to sync another user
 │   ├── recheck_badges_user.py # /recheck_badges_user: mod command for full badge audit
+│   ├── backfill_unverified.py # /backfill_unverified: one-time transition command giving the Unverified role to members without Verified (delete once run)
 │   ├── community_stats.py  # /trophystats today|yesterday|records: community-wide trophy aggregates
 │   ├── link_help.py        # !link: public instructions for PSN account linking
 │   ├── welcome.py          # Event listener: posts a welcome embed when a member joins
@@ -189,7 +190,7 @@ pytest                                  # run the suite
 - **Discord boundary**: Discord interactions are mocked with `AsyncMock` (no live gateway). Cog command bodies are invoked directly via `Cog.command.callback(cog, interaction, ...)`.
 - **HTTP boundary**: outbound PlatPursuit API calls (aiohttp) are mocked with `aioresponses` (see `tests/test_refresh.py` for the pattern). This is how to test the API-consuming cogs.
 - **Database**: DB tests run against a per-test temp SQLite file through the real `init_db`, so the SQLAlchemy models/queries are exercised for real.
-- **Coverage today**: db engine + models, notes cog (DB integration), ticket pure-logic helpers, X-announce filters, formatting, the verification role swap (helper + the /link and /unlink cogs that drive it), and one boundary-mocked API cog. **Extending**: API cogs follow the `test_refresh.py` aioresponses pattern; deeper Discord-interaction flows build on the `conftest.py` mocks. The bar is "no new logic without a committed test."
+- **Coverage today**: db engine + models, notes cog (DB integration), ticket pure-logic helpers, X-announce filters, formatting, the verification role swap (helper + the /link and /unlink cogs that drive it), the Unverified backfill command, and one boundary-mocked API cog. **Extending**: API cogs follow the `test_refresh.py` aioresponses pattern; deeper Discord-interaction flows build on the `conftest.py` mocks. The bar is "no new logic without a committed test."
 
 ---
 

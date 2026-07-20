@@ -166,6 +166,9 @@ bot.api_base_url = API_BASE_URL
 bot.api_key = API_KEY
 bot.api_headers = {'Authorization': f"Token {API_KEY}"}
 bot.api_session = None
+# Shared with cogs that need bulk role work to go through the rate-limited worker
+# rather than calling Discord directly (see commands/backfill_unverified.py).
+bot.role_queue = role_queue
 bot.db_engine = None
 bot.db_sessionmaker = None
 # `or 0` (not a getenv default) so a blank env var is treated as unset rather than crashing.
@@ -264,6 +267,8 @@ async def load_extensions():
         'commands.sync_roles',
         'commands.sync_roles_user',
         'commands.recheck_badges_user',
+        # One-time Verified/Unverified transition helper; remove once backfilled.
+        'commands.backfill_unverified',
 
         'commands.community_stats',
 

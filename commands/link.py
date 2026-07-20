@@ -4,6 +4,8 @@ from discord.ext import commands
 import asyncio
 import logging
 
+from utils.roles import RoleSwapError, apply_verification_roles
+
 logger = logging.getLogger('psn_api')
 
 class LinkCog(commands.Cog):
@@ -67,26 +69,25 @@ class LinkCog(commands.Cog):
                         if verify_resp.status == 200:
                             data = await verify_resp.json()
                             if data.get('success'):
-                                if self.bot.verified_role_id == 0:
-                                    logger.warning(f"No VERIFIED_ROLE_ID set. Skipping role assignment for {discord_id}")
-                                else:
-                                    try:
-                                        role = button_interaction.guild.get_role(self.bot.verified_role_id)
-                                        if role:
-                                            await button_interaction.user.add_roles(role)
-                                            logger.info(f"Assigned verified role to {discord_id}")
-                                        else:
-                                            logger.error(f"Role ID {self.bot.verified_role_id} not found in guild {button_interaction.guild_id}")
-                                    except discord.Forbidden:
-                                        logger.error(f"Bot lacks permissions to assign role to {discord_id}")
-                                        await button_interaction.followup.send('Verification succeeded but role assignment failed. Contact admin.', ephemeral=True)
-                                        return
-                                    except Exception as e:
-                                        logger.error(f"Role assignment error: {e}")
-                                        await button_interaction.followup.send('Verification succeeded but unexpected error assigning role. Contact admin.', ephemeral=True)
-                                        return
+                                # Achievement-role sync is independent of the verification
+                                # role swap, so start it first: a misconfigured role must
+                                # not stop a verified user's badge roles from syncing.
                                 asyncio.create_task(self._sync_roles_fire_and_forget(discord_id))
-                                await button_interaction.followup.send('Success! Your PSN is verified and linked.', ephemeral=True)
+                                try:
+                                    await apply_verification_roles(
+                                        button_interaction.user,
+                                        verified=True,
+                                        verified_role_id=self.bot.verified_role_id,
+                                        unverified_role_id=self.bot.unverified_role_id,
+                                        reason='PSN verified via /link',
+                                    )
+                                    result = 'Success! Your PSN is verified and linked.'
+                                except RoleSwapError as e:
+                                    result = f"Verification succeeded but {e}. Contact admin."
+                                except Exception as e:
+                                    logger.error(f"Unexpected error assigning verification roles for {discord_id}: {e}")
+                                    result = 'Verification succeeded but unexpected error assigning roles. Contact admin.'
+                                await button_interaction.followup.send(result, ephemeral=True)
                             else:
                                 await button_interaction.followup.send(f"Error: {data.get('message', 'Verification failed. Check About Me and permissions.')}", ephemeral=True)
                         elif verify_resp.status == 502:

@@ -168,7 +168,9 @@ bot.api_headers = {'Authorization': f"Token {API_KEY}"}
 bot.api_session = None
 bot.db_engine = None
 bot.db_sessionmaker = None
-bot.verified_role_id = int(os.getenv('VERIFIED_ROLE_ID', 0))
+# `or 0` (not a getenv default) so a blank env var is treated as unset rather than crashing.
+bot.verified_role_id = int(os.getenv('VERIFIED_ROLE_ID') or 0)
+bot.unverified_role_id = int(os.getenv('UNVERIFIED_ROLE_ID') or 0)
 
 bot.plat_pursuit_emoji = f"<:PlatPursuit:{PLAT_PURSUIT_EMOJI_ID}>" if PLAT_PURSUIT_EMOJI_ID else "🏆"
 bot.platinum_emoji = f"<:Platinum_Trophy:{PLATINUM_EMOJI_ID}>" if PLATINUM_EMOJI_ID else "🏆"

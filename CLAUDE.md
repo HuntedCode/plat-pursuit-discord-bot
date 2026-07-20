@@ -78,7 +78,8 @@ PlatBot/
 │   ├── models.py           # Declarative Base + ModNote model (platbot_mod_notes table)
 │   └── engine.py           # Engine/session factory + DATABASE_URL normalization (init_db)
 ├── utils/                  # Shared utilities
-│   └── formatting.py       # Number/string formatters shared across cogs
+│   ├── formatting.py       # Number/string formatters shared across cogs
+│   └── roles.py            # Verified/Unverified role swap shared by /link and /unlink
 ├── scripts/                # Operational CLI helpers (run inside the container via Render shell)
 │   └── x_admin.py          # Wrapper for /admin/x-announce/{test,latest} (curl-free)
 ├── docs/                   # Feature documentation (see docs/features/)
@@ -146,7 +147,8 @@ async def setup(bot):
 | `API_BASE_URL` | PlatPursuit API base URL |
 | `API_KEY` | API authentication key |
 | `DISCORD_GUILD_ID` | Target Discord server |
-| `VERIFIED_ROLE_ID` | Role assigned after PSN verification |
+| `VERIFIED_ROLE_ID` | Role assigned after PSN verification (removed on unlink) |
+| `UNVERIFIED_ROLE_ID` | Onboarding role removed on verification and re-added on unlink. Unset = that half of the swap is skipped |
 | `WELCOME_CHANNEL_ID` | Channel for welcome messages |
 | `ENABLE_WELCOME_PINGS` | Toggle welcome ping behavior |
 | `WELCOME_DELAY_SECONDS` | Delay before sending welcome message |
@@ -187,7 +189,7 @@ pytest                                  # run the suite
 - **Discord boundary**: Discord interactions are mocked with `AsyncMock` (no live gateway). Cog command bodies are invoked directly via `Cog.command.callback(cog, interaction, ...)`.
 - **HTTP boundary**: outbound PlatPursuit API calls (aiohttp) are mocked with `aioresponses` (see `tests/test_refresh.py` for the pattern). This is how to test the API-consuming cogs.
 - **Database**: DB tests run against a per-test temp SQLite file through the real `init_db`, so the SQLAlchemy models/queries are exercised for real.
-- **Coverage today**: db engine + models, notes cog (DB integration), ticket pure-logic helpers, X-announce filters, formatting, and one boundary-mocked API cog. **Extending**: API cogs follow the `test_refresh.py` aioresponses pattern; deeper Discord-interaction flows build on the `conftest.py` mocks. The bar is "no new logic without a committed test."
+- **Coverage today**: db engine + models, notes cog (DB integration), ticket pure-logic helpers, X-announce filters, formatting, the verification role swap (helper + the /link and /unlink cogs that drive it), and one boundary-mocked API cog. **Extending**: API cogs follow the `test_refresh.py` aioresponses pattern; deeper Discord-interaction flows build on the `conftest.py` mocks. The bar is "no new logic without a committed test."
 
 ---
 

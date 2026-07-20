@@ -3,6 +3,8 @@ from discord import app_commands
 from discord.ext import commands
 import logging
 
+from utils.roles import RoleSwapError, apply_verification_roles
+
 logger = logging.getLogger('psn_api')
 
 class UnlinkCog(commands.Cog):
@@ -30,28 +32,30 @@ class UnlinkCog(commands.Cog):
         view = discord.ui.View(timeout=180)
 
         async def yes_callback(interaction: discord.Interaction):
+            # The unlink API call plus two role operations can outrun Discord's 3s
+            # interaction deadline, so acknowledge first and edit the result in after.
+            await interaction.response.defer()
             payload = {'discord_id': discord_id}
             async with session.post(f"{self.bot.api_base_url}unlink/", json=payload) as resp:
-                if resp.status == 200:
-                    if self.bot.verified_role_id != 0:
-                        try:
-                            role = interaction.guild.get_role(self.bot.verified_role_id)
-                            if role:
-                                await interaction.user.remove_roles(role)
-                                logger.info(f"Removed verified role from {discord_id}")
-                            else:
-                                logger.error(f"Role ID {self.bot.verified_role_id} not found in guild {interaction.guild_id}")
-                        except discord.Forbidden:
-                            logger.error(f"Bot lacks permissions to remove role from {discord_id}")
-                            await interaction.response.edit_message(content='Unlink succeeded but role removal failed. Contact admin.', embed=None, view=None)
-                            return
-                        except Exception as e:
-                            logger.error(f"Role removal error: {e}")
-                            await interaction.response.edit_message(content='Unlink succeeded but unexpected error removing role. Contact admin.', embed=None, view=None)
-                            return
-                    await interaction.response.edit_message(content='Unlinked successfully!', embed=None, view=None)
-                else:
-                    await interaction.response.edit_message(content='Unlink failed. Try again or contact an admin.', embed=None, view=None)
+                if resp.status != 200:
+                    await interaction.edit_original_response(content='Unlink failed. Try again or contact an admin.', embed=None, view=None)
+                    return
+
+                try:
+                    await apply_verification_roles(
+                        interaction.user,
+                        verified=False,
+                        verified_role_id=self.bot.verified_role_id,
+                        unverified_role_id=self.bot.unverified_role_id,
+                        reason='PSN unlinked via /unlink',
+                    )
+                    result = 'Unlinked successfully!'
+                except RoleSwapError as e:
+                    result = f"Unlink succeeded but {e}. Contact admin."
+                except Exception as e:
+                    logger.error(f"Unexpected error removing verification roles for {discord_id}: {e}")
+                    result = 'Unlink succeeded but unexpected error updating roles. Contact admin.'
+                await interaction.edit_original_response(content=result, embed=None, view=None)
 
         async def no_callback(interaction: discord.Interaction):
             await interaction.response.edit_message(content='Unlink cancelled.', embed=None, view=None)

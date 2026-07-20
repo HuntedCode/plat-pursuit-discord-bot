@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 import pytest
 
-from commands.welcome import FOOTER, WelcomeCog
+from commands.welcome import FOOTER, WEBSITE_URL, WelcomeCog
 
 WELCOME_CHANNEL = 900
 VERIFIED_CHANNEL = 901
@@ -63,6 +63,7 @@ async def test_verified_welcome_announces_mention_and_psn(welcome_env):
     assert '<@42>' in embed.description
     assert 'CoolPSN' in embed.description
     assert '/refresh' in embed.fields[0].value
+    assert WEBSITE_URL in embed.fields[1].value
 
 
 async def test_verified_welcome_posts_to_its_own_channel(welcome_env):

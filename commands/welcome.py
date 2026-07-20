@@ -7,6 +7,7 @@ import asyncio
 logger = logging.getLogger('psn_api')
 
 FOOTER = 'Happy pursuing! 🏆 | No Trophy Can Hide From Us'
+WEBSITE_URL = 'https://www.platpursuit.com/'
 
 # PSN names are short; the cap only guards against a junk value reaching a public embed.
 MAX_PSN_DISPLAY_LENGTH = 32
@@ -62,7 +63,7 @@ class WelcomeCog(commands.Cog):
         embed = discord.Embed(title=f"Welcome to Plat Pursuit! {self.bot.plat_pursuit_emoji}", color=0x00ff00, description=f"Hey {mention}! It's good to see you! Follow the instructions below to get the most out of our services.")
         embed.add_field(
             name='Getting Started',
-            value=f"1. Use **/link <psn_username>** to connect and sync your PSN profile to our service.\n2. Add the generated code to your PSN **'About Me'** and click **Verify Now**.\n3. Once verified you'll have full access to our server and state of the art Discord bot! Feel free to use the various slash commands.\n4. Visit our website! https://www.platpursuit.com/\nQuestions? Ping a moderator! {self.bot.plat_pursuit_emoji} {self.bot.platinum_emoji}",
+            value=f"1. Use **/link <psn_username>** to connect and sync your PSN profile to our service.\n2. Add the generated code to your PSN **'About Me'** and click **Verify Now**.\n3. Once verified you'll have full access to our server and state of the art Discord bot! Feel free to use the various slash commands.\n4. Visit our website! {WEBSITE_URL}\nQuestions? Ping a moderator! {self.bot.plat_pursuit_emoji} {self.bot.platinum_emoji}",
             inline=False,
         )
         await self._post(channel, member, embed, 'welcome')
@@ -90,6 +91,15 @@ class WelcomeCog(commands.Cog):
                 f"{self.bot.gold_emoji} **/refresh** - pull in your latest trophies (once per hour)\n"
                 f"{self.bot.silver_emoji} **/trophystats** - see what the community earned today\n\n"
                 'Say hi and tell us what you are chasing right now!'
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name=f"Get the most out of Plat Pursuit {self.bot.plat_pursuit_emoji}",
+            value=(
+                f"Discord is only half of it. Head over to **[platpursuit.com]({WEBSITE_URL})** to track your "
+                'full trophy journey, earn our custom collectible badges, compare yourself against the '
+                'community, and plenty more.'
             ),
             inline=False,
         )

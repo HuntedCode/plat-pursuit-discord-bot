@@ -69,7 +69,7 @@ PlatBot/
 │   ├── backfill_unverified.py # /backfill_unverified: one-time transition command giving the Unverified role to members without Verified (delete once run)
 │   ├── community_stats.py  # /trophystats today|yesterday|records: community-wide trophy aggregates
 │   ├── link_help.py        # !link: public instructions for PSN account linking
-│   ├── welcome.py          # Event listener: posts a welcome embed when a member joins
+│   ├── welcome.py          # Event listeners: welcome embed on join, plus a verified welcome in its own channel when a member completes /link verification
 │   ├── member_events.py    # Event listener: auto-unlinks PSN profile on member leave (toggle: ENABLE_UNLINK_ON_LEAVE)
 │   ├── audit_log.py        # Event listener: member join/leave logging to audit channel
 │   ├── x_announcements.py  # Background task: polls an X RSS feed and announces new posts to a channel (toggle: ENABLE_X_ANNOUNCEMENTS)
@@ -150,8 +150,9 @@ async def setup(bot):
 | `DISCORD_GUILD_ID` | Target Discord server |
 | `VERIFIED_ROLE_ID` | Role assigned after PSN verification (removed on unlink) |
 | `UNVERIFIED_ROLE_ID` | Onboarding role removed on verification and re-added on unlink. Unset = that half of the swap is skipped |
-| `WELCOME_CHANNEL_ID` | Channel for welcome messages |
-| `ENABLE_WELCOME_PINGS` | Toggle welcome ping behavior |
+| `WELCOME_CHANNEL_ID` | Channel for the on-join welcome message |
+| `VERIFIED_WELCOME_CHANNEL_ID` | Channel for the post-verification welcome announcement. Unset = no verified welcome is posted |
+| `ENABLE_WELCOME_PINGS` | Toggle welcome ping behavior (applies to both welcome messages) |
 | `WELCOME_DELAY_SECONDS` | Delay before sending welcome message |
 | `ENABLE_UNLINK_ON_LEAVE` | Toggle auto-unlink of PSN profile on member leave |
 | `AUDIT_LOG_CHANNEL_ID` | Channel for member join/leave audit log embeds |
@@ -190,7 +191,7 @@ pytest                                  # run the suite
 - **Discord boundary**: Discord interactions are mocked with `AsyncMock` (no live gateway). Cog command bodies are invoked directly via `Cog.command.callback(cog, interaction, ...)`.
 - **HTTP boundary**: outbound PlatPursuit API calls (aiohttp) are mocked with `aioresponses` (see `tests/test_refresh.py` for the pattern). This is how to test the API-consuming cogs.
 - **Database**: DB tests run against a per-test temp SQLite file through the real `init_db`, so the SQLAlchemy models/queries are exercised for real.
-- **Coverage today**: db engine + models, notes cog (DB integration), ticket pure-logic helpers, X-announce filters, formatting, the verification role swap (helper + the /link and /unlink cogs that drive it), the Unverified backfill command, and one boundary-mocked API cog. **Extending**: API cogs follow the `test_refresh.py` aioresponses pattern; deeper Discord-interaction flows build on the `conftest.py` mocks. The bar is "no new logic without a committed test."
+- **Coverage today**: db engine + models, notes cog (DB integration), ticket pure-logic helpers, X-announce filters, formatting, the verification role swap (helper + the /link and /unlink cogs that drive it), the Unverified backfill command, both welcome messages, and one boundary-mocked API cog. **Extending**: API cogs follow the `test_refresh.py` aioresponses pattern; deeper Discord-interaction flows build on the `conftest.py` mocks. The bar is "no new logic without a committed test."
 
 ---
 

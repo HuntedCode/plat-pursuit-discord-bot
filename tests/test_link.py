@@ -57,7 +57,7 @@ async def test_verify_success_swaps_roles_and_syncs(link_bot, user_factory, inte
 
     verify = await open_verify(cog, interaction_factory(user=user_factory(7)))
     with aioresponses() as mocked:
-        mocked.post('https://api.test/verify/', payload={'success': True})
+        mocked.post('https://api.test/verify/', payload={'success': True, 'psn_username': 'CoolPSN'})
         await verify(press)
         await asyncio.sleep(0)  # let the fire-and-forget sync task start
 
@@ -65,6 +65,8 @@ async def test_verify_success_swaps_roles_and_syncs(link_bot, user_factory, inte
     assert swap.await_args.kwargs['verified'] is True
     assert swap.await_args.kwargs['unverified_role_id'] == UNVERIFIED_ID
     sync.assert_awaited_once()
+    # Drives the verified welcome post; the API's canonical PSN name wins.
+    link_bot.dispatch.assert_called_once_with('psn_verified', press.user, 'CoolPSN')
 
 
 async def test_role_swap_failure_still_syncs_and_clears_the_button(link_bot, user_factory, interaction_factory, monkeypatch):
@@ -87,6 +89,24 @@ async def test_role_swap_failure_still_syncs_and_clears_the_button(link_bot, use
     assert 'Verification succeeded but the Unverified role was not found' in _sent(press)
     sync.assert_awaited_once()
     (await press.original_response()).edit.assert_awaited_with(view=None)
+    # No public welcome for someone whose roles did not actually apply.
+    link_bot.dispatch.assert_not_called()
+
+
+async def test_dispatch_falls_back_to_the_submitted_psn_name(link_bot, user_factory, interaction_factory, monkeypatch):
+    """Older API responses omit psn_username; the announcement still needs a name."""
+    monkeypatch.setattr('commands.link.apply_verification_roles', AsyncMock())
+    monkeypatch.setattr(LinkCog, '_sync_roles_fire_and_forget', AsyncMock())
+    cog = LinkCog(link_bot)
+    press = button_interaction(user_factory(7))
+
+    verify = await open_verify(cog, interaction_factory(user=user_factory(7)))
+    with aioresponses() as mocked:
+        mocked.post('https://api.test/verify/', payload={'success': True})
+        await verify(press)
+        await asyncio.sleep(0)
+
+    link_bot.dispatch.assert_called_once_with('psn_verified', press.user, 'coolpsn')
 
 
 async def test_failed_verification_does_not_touch_roles(link_bot, user_factory, interaction_factory, monkeypatch):
@@ -101,4 +121,5 @@ async def test_failed_verification_does_not_touch_roles(link_bot, user_factory, 
         await verify(press)
 
     swap.assert_not_awaited()
+    link_bot.dispatch.assert_not_called()
     assert 'Code not found' in _sent(press)

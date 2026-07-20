@@ -82,6 +82,14 @@ class LinkCog(commands.Cog):
                                         reason='PSN verified via /link',
                                     )
                                     result = 'Success! Your PSN is verified and linked.'
+                                    # Listened for by WelcomeCog (verified welcome post).
+                                    # Dispatched only after the role swap returns cleanly,
+                                    # so a failed assignment never gets a public welcome.
+                                    self.bot.dispatch(
+                                        'psn_verified',
+                                        button_interaction.user,
+                                        data.get('psn_username') or psn_username,
+                                    )
                                 except RoleSwapError as e:
                                     result = f"Verification succeeded but {e}. Contact admin."
                                 except Exception as e:

@@ -5,41 +5,14 @@ then invoke the button's callback off the View it sent.
 """
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
-import pytest
 from tests.fake_api import mock_api
 
 from commands.link import LinkCog
 from utils.roles import RoleSwapError
 
-VERIFIED_ID = 111
-UNVERIFIED_ID = 222
-
-
-@pytest.fixture
-def link_bot(api_bot):
-    api_bot.verified_role_id = VERIFIED_ID
-    api_bot.unverified_role_id = UNVERIFIED_ID
-    return api_bot
-
-
-async def open_verify(cog, interaction):
-    """Run /link and return its 'Verify Now' callback."""
-    with mock_api(cog.bot) as mocked:
-        mocked.post('https://api.test/generate-code/', payload={'code': 'ABC123'})
-        await LinkCog.link.callback(cog, interaction, 'coolpsn')
-    view = interaction.followup.send.call_args.kwargs['view']
-    return view.children[0].callback
-
-
-def button_interaction(user):
-    interaction = MagicMock(name='ButtonInteraction')
-    interaction.user = user
-    interaction.response.defer = AsyncMock()
-    interaction.followup.send = AsyncMock()
-    interaction.original_response = AsyncMock(return_value=MagicMock(edit=AsyncMock()))
-    return interaction
+from conftest import UNVERIFIED_ID, button_interaction, open_verify
 
 
 def _sent(interaction) -> str:

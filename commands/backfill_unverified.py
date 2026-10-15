@@ -15,6 +15,8 @@ from discord.ext import commands
 import asyncio
 import logging
 
+from utils.command_errors import ReplyOnErrorView
+
 logger = logging.getLogger('psn_api')
 
 CONFIRM_TIMEOUT = 180
@@ -153,7 +155,7 @@ class BackfillUnverifiedCog(commands.Cog):
             inline=False,
         )
 
-        view = discord.ui.View(timeout=CONFIRM_TIMEOUT)
+        view = ReplyOnErrorView(timeout=CONFIRM_TIMEOUT)
 
         async def confirm_callback(button_interaction: discord.Interaction):
             if button_interaction.user.id != interaction.user.id:

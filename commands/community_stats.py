@@ -1,3 +1,6 @@
+import asyncio
+
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -6,6 +9,8 @@ from zoneinfo import ZoneInfo
 import logging
 import time
 
+from utils.api_errors import UNAVAILABLE_MESSAGE, api_error_message
+from utils.command_errors import ReplyOnErrorView, edit_reply
 from utils.formatting import format_number
 
 logger = logging.getLogger('psn_api')
@@ -39,12 +44,10 @@ class CommunityStatsCog(commands.Cog):
                     return await resp.json(), None
                 if resp.status == 404:
                     return None, "No community stats data found for that day yet. Check back soon!"
-                text = await resp.text()
-                logger.error(f"Community-stats API error {resp.status} on {url}: {text}")
-                return None, "Couldn't reach the PlatPursuit API right now. Try again in a moment."
-        except Exception:
-            logger.exception(f"Community-stats API exception on {url}")
-            return None, "Couldn't reach the PlatPursuit API right now. Try again in a moment."
+                return None, await api_error_message(resp, action=path)
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            logger.warning(f"Could not reach PlatPursuit for community stats ({path}): {e!r}")
+            return None, UNAVAILABLE_MESSAGE
 
     def _build_day_embed(self, data: dict, title: str, footer: str) -> discord.Embed:
         embed = discord.Embed(
@@ -59,7 +62,7 @@ class CommunityStatsCog(commands.Cog):
         return embed
 
     def _build_publish_view(self, invoker_id: int, embed: discord.Embed) -> discord.ui.View:
-        view = discord.ui.View(timeout=PUBLISH_VIEW_TIMEOUT_SECONDS)
+        view = ReplyOnErrorView(timeout=PUBLISH_VIEW_TIMEOUT_SECONDS)
 
         async def publish_callback(btn_interaction: discord.Interaction):
             if btn_interaction.user.id != invoker_id:
@@ -94,16 +97,10 @@ class CommunityStatsCog(commands.Cog):
                     f"User {invoker_id} published community stats to channel {btn_interaction.channel_id}"
                 )
             except discord.Forbidden:
-                await btn_interaction.response.edit_message(
-                    content='Publish failed (bot lacks permissions). Contact admin.',
-                    view=None,
-                )
+                await edit_reply(btn_interaction, content='Publish failed (bot lacks permissions). Contact admin.', view=None)
             except Exception as e:
-                logger.error(f"Community-stats publish error: {e}")
-                await btn_interaction.response.edit_message(
-                    content='Publish failed. Try again later or contact an admin.',
-                    view=None,
-                )
+                logger.error(f"Community-stats publish error: {e!r}")
+                await edit_reply(btn_interaction, content='Publish failed. Try again later or contact an admin.', view=None)
 
         button = discord.ui.Button(label='Publish to Channel', style=discord.ButtonStyle.success)
         button.callback = publish_callback
@@ -169,7 +166,7 @@ class CommunityStatsCog(commands.Cog):
             wait = int(error.retry_after) + 1
             msg = f"You're using community stats commands too fast. Try again in {wait}s."
         else:
-            logger.error(f"Community-stats command error: {error}")
+            logger.error("Community-stats command error", exc_info=error)
             msg = "Something went wrong. Please try again later."
 
         if interaction.response.is_done():

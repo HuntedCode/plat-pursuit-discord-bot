@@ -4,6 +4,8 @@ from discord.ext import commands
 import logging
 
 from utils.formatting import format_number
+from utils.api_errors import api_error_message
+from utils.command_errors import ReplyOnErrorView, edit_reply
 
 logger = logging.getLogger('psn_api')
 
@@ -69,7 +71,7 @@ class SummaryCog(commands.Cog):
 
                     embed.set_footer(text=f"Last synced: {profile['last_synced']}")
 
-                    view = discord.ui.View(timeout=900)
+                    view = ReplyOnErrorView(timeout=900)
 
                     async def publish_callback(interaction: discord.Interaction):
                         try:
@@ -79,10 +81,10 @@ class SummaryCog(commands.Cog):
                             await interaction.channel.send(embed=public_embed)
                             logger.info(f"User {discord_id} published profile summary to channel {interaction.channel_id}")
                         except discord.Forbidden:
-                            await interaction.response.edit_message(content='Publish failed (bot lacks permissions). Contact admin.', view=None)
+                            await edit_reply(interaction, content='Publish failed (bot lacks permissions). Contact admin.', view=None)
                         except Exception as e:
-                            logger.error(f"Publish error: {e}")
-                            await interaction.response.edit_message(content='Publish failed. Try again later or contact an admin.', view=None)
+                            logger.error(f"Publish error: {e!r}")
+                            await edit_reply(interaction, content='Publish failed. Try again later or contact an admin.', view=None)
 
                     button = discord.ui.Button(label='Publish to Channel', style=discord.ButtonStyle.success)
                     button.callback = publish_callback
@@ -92,9 +94,7 @@ class SummaryCog(commands.Cog):
                 else:
                     await interaction.followup.send('No PSN linked. Use /link first!', ephemeral=True)
             else:
-                error_text = await resp.text()
-                logger.error(f"API error: {resp.status} - {error_text}")
-                await interaction.followup.send('API error. Please try again later.', ephemeral=True)
+                await interaction.followup.send(await api_error_message(resp, action='summary'), ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(SummaryCog(bot))

@@ -20,31 +20,13 @@ import commands
 from commands.community_stats import CommunityStatsCog
 from commands.notes import NotesCog
 from commands.recheck_badges_user import RECHECK_TIMEOUT
-from conftest import TEST_API_KEY
+from conftest import TEST_API_KEY, fake_channel, fake_role
 from utils.command_errors import (
     COOLDOWN_MESSAGE, FAILED_MESSAGE, NO_PERMISSION_MESSAGE, handle_app_command_error,
 )
 from utils.role_guard import PRIVILEGED_PERMISSIONS, refusal_reason
 
 HOME_GUILD = 111
-
-
-def fake_channel(name, role_overwrite):
-    channel = MagicMock(spec=discord.TextChannel)
-    channel.name = name
-    channel.overwrites_for.return_value = role_overwrite
-    return channel
-
-
-def fake_role(*, default=False, managed=False, channels=(), **perms):
-    role = MagicMock(spec=discord.Role)
-    role.name = 'Some Role'
-    role.is_default.return_value = default
-    role.managed = managed
-    role.permissions = discord.Permissions(**perms)
-    role.guild = MagicMock(spec=discord.Guild)
-    role.guild.channels = list(channels)
-    return role
 
 
 # --- which roles the API may touch ------------------------------------------------------------

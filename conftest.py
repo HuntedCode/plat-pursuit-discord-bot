@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
+import discord
 import pytest
 import pytest_asyncio
 
@@ -75,6 +76,26 @@ async def notes_bot(db_sessionmaker):
     bot = MagicMock(name='Bot')
     bot.db_sessionmaker = db_sessionmaker
     return bot
+
+
+def fake_channel(name: str, role_overwrite) -> MagicMock:
+    """A text channel whose overwrite for any role is `role_overwrite`."""
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.name = name
+    channel.overwrites_for.return_value = role_overwrite
+    return channel
+
+
+def fake_role(*, default: bool = False, managed: bool = False, channels=(), **perms) -> MagicMock:
+    """A role with the given permission flags, in a guild holding `channels` (role guard, workers)."""
+    role = MagicMock(spec=discord.Role)
+    role.name = 'Some Role'
+    role.is_default.return_value = default
+    role.managed = managed
+    role.permissions = discord.Permissions(**perms)
+    role.guild = MagicMock(spec=discord.Guild)
+    role.guild.channels = list(channels)
+    return role
 
 
 #: The API key the webhook tests pin, because importing bot.py loads the developer's .env.

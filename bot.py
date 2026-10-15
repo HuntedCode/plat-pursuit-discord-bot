@@ -11,6 +11,7 @@ import uvicorn
 import signal
 import hmac
 import uuid
+from collections.abc import Callable
 from urllib.parse import urlparse
 from aiohttp import BasicAuth, ClientSession, ClientTimeout
 from pydantic import BaseModel
@@ -28,115 +29,96 @@ INSTANCE_ID = uuid.uuid4().hex[:8]
 role_queue = asyncio.Queue()
 role_removal_queue = asyncio.Queue()
 
-async def role_assignment_worker():
-    while True:
-        data = await role_queue.get()
-        max_retries = 5
-        retry_count = 0
-        while retry_count < max_retries:
-            try:
-                user_id = data.get('user_id')
-                role_id = data.get('role_id')
-                guild_id = data.get('guild_id', GUILD_ID)
+#: Attempts per role change before it is dropped (a 429 counts as an attempt).
+ROLE_MAX_ATTEMPTS = 5
+#: First wait before retrying a Discord 5xx or a network error; doubles each time (1s, 2s, 4s, 8s).
+ROLE_RETRY_BASE_SECONDS = 1
+#: Pause between queue items, so a bulk sweep stays under Discord's rate limits.
+ROLE_QUEUE_PAUSE_SECONDS = 0.5
 
-                guild = bot.get_guild(guild_id)
-                if not guild:
-                    logger.error(f"Guild not found: {guild_id}")
-                    break
 
-                role = guild.get_role(role_id)
-                if not role:
-                    logger.error(f"Role not found: {role_id} in guild {guild_id}")
-                    break
-                if reason := refusal_reason(role):
-                    logger.warning(f"Refused to assign role {role.name} ({role_id}): {reason}")
-                    break
+async def apply_role_change(data: dict, adding: bool) -> None:
+    """Add or remove one role, retrying what can succeed later and dropping what cannot.
 
-                member = guild.get_member(user_id)
-                if not member:
-                    try:
-                        member = await guild.fetch_member(user_id)
-                    except discord.NotFound:
-                        logger.error(f"Member not found: {user_id} in guild {guild_id}")
-                        break
-
+    A 429 waits for Discord's Retry-After. A 5xx or a network error waits 1s, 2s, 4s... A 4xx
+    (the role sits above the bot's, a missing permission) cannot succeed on retry, so it is logged
+    once and dropped.
+    """
+    verb = 'assign' if adding else 'remove'
+    user_id = data.get('user_id')
+    role_id = data.get('role_id')
+    guild_id = data.get('guild_id', GUILD_ID)
+    for attempt in range(1, ROLE_MAX_ATTEMPTS + 1):
+        try:
+            guild = bot.get_guild(guild_id)
+            if not guild:
+                logger.error(f"Guild not found: {guild_id}")
+                return
+            role = guild.get_role(role_id)
+            if not role:
+                logger.error(f"Role not found: {role_id} in guild {guild_id}")
+                return
+            if reason := refusal_reason(role):
+                logger.warning(f"Refused to {verb} role {role.name} ({role_id}): {reason}")
+                return
+            member = guild.get_member(user_id)
+            if not member:
+                try:
+                    member = await guild.fetch_member(user_id)
+                except discord.NotFound:
+                    logger.error(f"Member not found: {user_id} in guild {guild_id}")
+                    return
+            if adding:
                 await member.add_roles(role)
                 logger.info(f"Assigned role {role.name} to {member.name} in guild {guild_id}")
-                break
-            except discord.HTTPException as e:
-                if e.status == 429:
-                    retry_after = float(e.response.headers.get('Retry-After', 1))
-                    logger.warning(f"Rate limited (429) on role assignment. Retrying after {retry_after} seconds.")
-                    await asyncio.sleep(retry_after + 0.5)
-                else:
-                    logger.error(f"Role assignment failed: {e}")
-            except Exception as e:
-                logger.error(f"Error assigning role from queue: {e}")
-                await asyncio.sleep(1)
-            finally:
-                retry_count += 1
-        if retry_count >= max_retries:
-            logger.error(f"Max retries exceeded for role assignment: {data}. Dropping request.")
-        role_queue.task_done()
-
-        await asyncio.sleep(0.5)
-
-async def role_removal_worker():
-    while True:
-        data = await role_removal_queue.get()
-        max_retries = 5
-        retry_count = 0
-        while retry_count < max_retries:
-            try:
-                user_id = data.get('user_id')
-                role_id = data.get('role_id')
-                guild_id = data.get('guild_id', GUILD_ID)
-
-                guild = bot.get_guild(guild_id)
-                if not guild:
-                    logger.error(f"Guild not found: {guild_id}")
-                    break
-
-                role = guild.get_role(role_id)
-                if not role:
-                    logger.error(f"Role not found: {role_id} in guild {guild_id}")
-                    break
-                if reason := refusal_reason(role):
-                    logger.warning(f"Refused to remove role {role.name} ({role_id}): {reason}")
-                    break
-
-                member = guild.get_member(user_id)
-                if not member:
-                    try:
-                        member = await guild.fetch_member(user_id)
-                    except discord.NotFound:
-                        logger.error(f"Member not found: {user_id} in guild {guild_id}")
-                        break
-
-                if role not in member.roles:
-                    logger.info(f"Member {member.name} does not have role {role.name}, skipping removal")
-                    break
-
+            elif role not in member.roles:
+                logger.info(f"Member {member.name} does not have role {role.name}, skipping removal")
+            else:
                 await member.remove_roles(role)
                 logger.info(f"Removed role {role.name} from {member.name} in guild {guild_id}")
-                break
-            except discord.HTTPException as e:
-                if e.status == 429:
-                    retry_after = float(e.response.headers.get('Retry-After', 1))
-                    logger.warning(f"Rate limited (429) on role removal. Retrying after {retry_after} seconds.")
-                    await asyncio.sleep(retry_after + 0.5)
-                else:
-                    logger.error(f"Role removal failed: {e}")
-            except Exception as e:
-                logger.error(f"Error removing role from queue: {e}")
-                await asyncio.sleep(1)
-            finally:
-                retry_count += 1
-        if retry_count >= max_retries:
-            logger.error(f"Max retries exceeded for role removal: {data}. Dropping request.")
-        role_removal_queue.task_done()
+            return
+        except discord.HTTPException as e:
+            if e.status == 429:
+                retry_after = float(e.response.headers.get('Retry-After', 1))
+                logger.warning(f"Rate limited (429) on role {verb}. Retrying after {retry_after} seconds.")
+                await asyncio.sleep(retry_after + 0.5)
+            elif e.status >= 500:
+                await _wait_before_retry(f"Discord {e.status} on role {verb}", attempt)
+            else:
+                logger.error(f"Role {verb} failed with Discord {e.status}, not retrying: {e}")
+                return
+        except Exception as e:
+            await _wait_before_retry(f"Error on role {verb} ({e!r})", attempt)
+    logger.error(f"Gave up on role {verb} after {ROLE_MAX_ATTEMPTS} attempts: {data}")
 
-        await asyncio.sleep(0.5)
+
+async def _wait_before_retry(what: str, attempt: int) -> None:
+    if attempt < ROLE_MAX_ATTEMPTS:
+        wait = ROLE_RETRY_BASE_SECONDS * 2 ** (attempt - 1)
+        logger.warning(f"{what}. Retrying in {wait}s (attempt {attempt} of {ROLE_MAX_ATTEMPTS}).")
+        await asyncio.sleep(wait)
+    else:
+        logger.warning(f"{what} on the last attempt.")
+
+
+async def _role_worker(get_queue: Callable[[], asyncio.Queue], adding: bool) -> None:
+    # The queue is looked up per item rather than captured, so a test can swap in a fresh one.
+    while True:
+        queue = get_queue()
+        data = await queue.get()
+        try:
+            await apply_role_change(data, adding)
+        finally:
+            queue.task_done()
+        await asyncio.sleep(ROLE_QUEUE_PAUSE_SECONDS)
+
+
+async def role_assignment_worker() -> None:
+    await _role_worker(lambda: role_queue, adding=True)
+
+
+async def role_removal_worker() -> None:
+    await _role_worker(lambda: role_removal_queue, adding=False)
 
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')

@@ -59,7 +59,15 @@ A new role route must call `require_home_guild` and `require_api_togglable_role`
 
 ### Worker Queue System
 
-Role assignments and removals use async worker queues with retry logic and rate-limit handling. This prevents Discord API rate limit issues when processing bulk role changes (e.g., after a badge evaluation sweep).
+Role assignments and removals go through two async queues (`role_queue`, `role_removal_queue`), each drained by one worker. Both workers run the same `apply_role_change` in `bot.py`, one adding and one removing, with a short pause between items so a bulk change (a badge sweep, the Unverified backfill) stays under Discord's rate limits.
+
+| Discord answers | The worker |
+|---|---|
+| 429 | Waits for `Retry-After`, then tries again |
+| 5xx, or a network error | Waits 1s, 2s, 4s, 8s between attempts (`ROLE_RETRY_BASE_SECONDS`) |
+| Any other 4xx (the role sits above the bot's, a missing permission) | Logs it once and drops the request: a retry cannot succeed |
+
+Every change gets `ROLE_MAX_ATTEMPTS` (5) attempts, a 429 included; only a request that runs out logs "Gave up". Tests: `tests/test_role_workers.py`.
 
 ### Database
 
@@ -211,7 +219,7 @@ pytest                                  # run the suite
 - **HTTP boundary**: outbound PlatPursuit API calls are answered by `tests/fake_api.py`: the `api_bot` fixture's `api_session` is a `FakeApiSession`, and `with mock_api(cog.bot) as mocked: mocked.post(url, payload=...)` registers a response (see `tests/test_refresh.py`). An unregistered request raises `aiohttp.ClientConnectionError`, as a real network failure would. This replaced `aioresponses` in 2026-10, which broke on aiohttp 3.14.
 - **Webhook API**: `tests/test_api.py` drives the FastAPI app in `bot.py` through conftest's `webhook_client` fixture (`TestClient`, needs `httpx`, dev-only), which pins `TEST_API_KEY` because importing `bot.py` loads the developer's `.env`, and swaps in fresh role queues (`role_queues`) so nothing queued leaks between tests.
 - **Database**: DB tests run against a per-test temp SQLite file through the real `init_db`, so the SQLAlchemy models/queries are exercised for real.
-- **Coverage today**: db engine + models, notes cog (DB integration), ticket pure-logic helpers, X-announce filters, formatting, the verification role swap (helper + the /link and /unlink cogs that drive it), the Unverified backfill command, both welcome messages, the API-consuming cogs, the webhook API's auth gate, and the hardening in `tests/test_hardening.py` (role guard, home-server check, no docs routes, API timeout, mod-command runtime checks and the error handler). **Extending**: API cogs follow the `test_refresh.py` `mock_api` pattern; deeper Discord-interaction flows build on the `conftest.py` mocks. The bar is "no new logic without a committed test."
+- **Coverage today**: db engine + models, notes cog (DB integration), ticket pure-logic helpers, X-announce filters, formatting, the verification role swap (helper + the /link and /unlink cogs that drive it), the Unverified backfill command, both welcome messages, the API-consuming cogs, the webhook API's auth gate, the role workers' retry rules (`tests/test_role_workers.py`), and the hardening in `tests/test_hardening.py` (role guard, home-server check, no docs routes, API timeout, mod-command runtime checks and the error handler). **Extending**: API cogs follow the `test_refresh.py` `mock_api` pattern; deeper Discord-interaction flows build on the `conftest.py` mocks. The bar is "no new logic without a committed test."
 
 ---
 

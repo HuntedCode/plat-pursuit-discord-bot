@@ -19,10 +19,21 @@ PRIVILEGED_PERMISSIONS = (
     'mention_everyone', 'view_audit_log', 'view_guild_insights', 'view_creator_monetization_analytics',
 )
 
+#: Moderation permissions Discord has added that this discord.py release cannot name yet, by bit.
+#: Caught on the role itself only: discord.py drops unnamed bits when it builds a channel
+#: overwrite. Move each into PRIVILEGED_PERMISSIONS once discord.py names it (a test fails then).
+UNNAMED_PRIVILEGED_BITS = {
+    'pin_messages': 1 << 51,     # split out of manage_messages in 2025
+    'bypass_slowmode': 1 << 52,
+}
+
 
 def _privileged(permissions: discord.Permissions | discord.PermissionOverwrite) -> list[str]:
-    # An overwrite's flags are True (allow), False (deny) or None (inherit); only True grants.
-    return [name for name in PRIVILEGED_PERMISSIONS if getattr(permissions, name) is True]
+    if isinstance(permissions, discord.PermissionOverwrite):
+        # An overwrite's flags are allow, deny or inherit; only the allowed ones grant anything.
+        permissions = permissions.pair()[0]
+    named = [name for name in PRIVILEGED_PERMISSIONS if getattr(permissions, name)]
+    return named + [name for name, bit in UNNAMED_PRIVILEGED_BITS.items() if permissions.value & bit]
 
 
 def refusal_reason(role: discord.Role) -> str | None:

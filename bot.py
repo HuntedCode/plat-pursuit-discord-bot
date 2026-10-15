@@ -192,6 +192,15 @@ bot.bronze_emoji = f"<:Bronze_Trophy:{BRONZE_EMOJI_ID}>" if BRONZE_EMOJI_ID else
 
 GUILD_ID = int(os.getenv('DISCORD_GUILD_ID', 0))
 
+#: Roles the bot handles itself (the Verified/Unverified swap) or that grant access by ID rather
+#: than by permission flags (the ticket mod role sees and closes every ticket). PlatPursuit only
+#: sends badge, milestone and premium roles, so the webhook API refuses these outright.
+API_PROTECTED_ROLE_IDS = frozenset(
+    int(value)
+    for value in (os.getenv('VERIFIED_ROLE_ID'), os.getenv('UNVERIFIED_ROLE_ID'), os.getenv('TICKET_MOD_ROLE_ID'))
+    if value
+)
+
 # The interactive docs and the OpenAPI schema stay off: the API is called only by PlatPursuit,
 # and a public map of its routes helps nobody else.
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
@@ -218,6 +227,19 @@ def require_home_guild(data: RoleRequest) -> None:
     if data.guild_id is not None and data.guild_id != GUILD_ID:
         raise HTTPException(status_code=403, detail='Only the home server is allowed')
 
+def require_api_togglable_role(data: RoleRequest) -> None:
+    """Refuse a role the API may never toggle, up front, so PlatPursuit logs the refusal.
+
+    The workers check the role guard again when they run: the role can change while queued, and
+    a role the bot has not cached yet can only be checked there.
+    """
+    if data.role_id in API_PROTECTED_ROLE_IDS:
+        raise HTTPException(status_code=403, detail='This role is managed by the bot itself')
+    guild = bot.get_guild(GUILD_ID)
+    role = guild.get_role(data.role_id) if guild else None
+    if role and (reason := refusal_reason(role)):
+        raise HTTPException(status_code=403, detail=f'Refused: {reason}')
+
 @app.get("/health")
 async def health_check():
     return {'status': 'healthy'}
@@ -225,6 +247,7 @@ async def health_check():
 @app.post("/assign-role")
 async def assign_role(data: RoleRequest, _=Depends(verify_api_key)):
     require_home_guild(data)
+    require_api_togglable_role(data)
     await role_queue.put(data.model_dump(exclude_none=True))
     logger.info(f"Queued role assignment: user={data.user_id} role={data.role_id}")
     return {'status': 'queued', 'message': 'Role assignment queued for processing'}
@@ -232,6 +255,7 @@ async def assign_role(data: RoleRequest, _=Depends(verify_api_key)):
 @app.post("/remove-role")
 async def remove_role(data: RoleRequest, _=Depends(verify_api_key)):
     require_home_guild(data)
+    require_api_togglable_role(data)
     await role_removal_queue.put(data.model_dump(exclude_none=True))
     logger.info(f"Queued role removal: user={data.user_id} role={data.role_id}")
     return {'status': 'queued', 'message': 'Role removal queued for processing'}

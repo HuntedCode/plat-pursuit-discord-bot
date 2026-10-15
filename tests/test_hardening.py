@@ -18,11 +18,13 @@ from discord.ext import commands as ext_commands
 import bot
 import commands
 from commands.community_stats import CommunityStatsCog
+from commands.notes import NotesCog
 from commands.recheck_badges_user import RECHECK_TIMEOUT
+from conftest import TEST_API_KEY
 from utils.command_errors import (
     COOLDOWN_MESSAGE, FAILED_MESSAGE, NO_PERMISSION_MESSAGE, handle_app_command_error,
 )
-from utils.role_guard import PRIVILEGED_PERMISSIONS, refusal_reason
+from utils.role_guard import PRIVILEGED_PERMISSIONS, UNNAMED_PRIVILEGED_BITS, refusal_reason
 
 HOME_GUILD = 111
 
@@ -71,6 +73,24 @@ def test_power_granted_in_one_channel_is_refused():
     staff_only = fake_channel('mod-log', discord.PermissionOverwrite(manage_messages=True))
     reason = refusal_reason(fake_role(channels=[fake_channel('general', discord.PermissionOverwrite()), staff_only]))
     assert reason == 'it grants manage_messages in #mod-log'
+
+
+@pytest.mark.parametrize('name, bit', UNNAMED_PRIVILEGED_BITS.items())
+def test_permissions_discord_py_cannot_name_yet_are_refused_by_bit(name, bit):
+    # Role level only: discord.py drops bits it cannot name when it builds a channel overwrite.
+    assert name in refusal_reason(_role_with_bits(bit))
+
+
+@pytest.mark.parametrize('name', UNNAMED_PRIVILEGED_BITS)
+def test_the_unnamed_bits_are_still_unnamed(name):
+    """Fails once discord.py names one: move it into PRIVILEGED_PERMISSIONS then."""
+    assert name not in discord.Permissions.VALID_FLAGS
+
+
+def _role_with_bits(bits):
+    role = fake_role()
+    role.permissions = discord.Permissions(bits)
+    return role
 
 
 def test_a_role_may_unlock_a_channel_or_be_denied_power_in_one():
@@ -139,24 +159,22 @@ async def test_the_workers_still_toggle_a_plain_role(monkeypatch, worker, queue_
 # --- the webhook API --------------------------------------------------------------------------
 
 @pytest.fixture
-def client(monkeypatch):
-    from fastapi.testclient import TestClient
-
-    monkeypatch.setattr(bot, 'API_KEY', 'test-api-key-not-for-production')
+def client(webhook_client, monkeypatch):
+    """conftest's webhook client, on the home server, with no guild cached (as before the bot is ready)."""
     monkeypatch.setattr(bot, 'GUILD_ID', HOME_GUILD)
-    return TestClient(bot.app, raise_server_exceptions=False)
+    monkeypatch.setattr(bot.bot, 'get_guild', lambda guild_id: None)
+    return webhook_client
 
 
-@pytest.fixture
-def queues(monkeypatch):
-    fresh = {'/assign-role': asyncio.Queue(), '/remove-role': asyncio.Queue()}
-    monkeypatch.setattr(bot, 'role_queue', fresh['/assign-role'])
-    monkeypatch.setattr(bot, 'role_removal_queue', fresh['/remove-role'])
-    return fresh
+def _cache_role(monkeypatch, role):
+    guild = MagicMock(spec=discord.Guild)
+    guild.get_role.return_value = role
+    monkeypatch.setattr(bot.bot, 'get_guild', lambda guild_id: guild if guild_id == HOME_GUILD else None)
 
 
-AUTH = {'Authorization': 'Bearer test-api-key-not-for-production'}
+AUTH = {'Authorization': f'Bearer {TEST_API_KEY}'}
 ROLE_ROUTES = ['/assign-role', '/remove-role']
+ROLE_BODY = {'user_id': 1, 'role_id': 2}
 
 
 @pytest.mark.parametrize('path', ['/docs', '/redoc', '/openapi.json'])
@@ -165,18 +183,44 @@ def test_the_api_publishes_no_docs_or_schema(client, path):
 
 
 @pytest.mark.parametrize('path', ROLE_ROUTES)
-def test_another_server_is_refused(client, queues, path):
-    resp = client.post(path, json={'user_id': 1, 'role_id': 2, 'guild_id': 999}, headers=AUTH)
+def test_another_server_is_refused(client, role_queues, path):
+    resp = client.post(path, json={**ROLE_BODY, 'guild_id': 999}, headers=AUTH)
     assert resp.status_code == 403
-    assert queues[path].empty()
+    assert role_queues[path].empty()
 
 
 @pytest.mark.parametrize('path', ROLE_ROUTES)
-@pytest.mark.parametrize('body', [{'user_id': 1, 'role_id': 2}, {'user_id': 1, 'role_id': 2, 'guild_id': HOME_GUILD}])
-def test_the_home_server_is_accepted(client, queues, path, body):
+@pytest.mark.parametrize('body', [ROLE_BODY, {**ROLE_BODY, 'guild_id': HOME_GUILD}])
+def test_the_home_server_is_accepted(client, role_queues, path, body):
     resp = client.post(path, json=body, headers=AUTH)
     assert resp.status_code == 200
-    assert queues[path].qsize() == 1
+    assert role_queues[path].qsize() == 1
+
+
+@pytest.mark.parametrize('path', ROLE_ROUTES)
+def test_roles_the_bot_handles_itself_are_refused(client, role_queues, monkeypatch, path):
+    """Verified, Unverified and the ticket mod role: a leaked key must not verify or promote anyone."""
+    monkeypatch.setattr(bot, 'API_PROTECTED_ROLE_IDS', frozenset({ROLE_BODY['role_id']}))
+    resp = client.post(path, json=ROLE_BODY, headers=AUTH)
+    assert resp.status_code == 403
+    assert role_queues[path].empty()
+
+
+@pytest.mark.parametrize('path', ROLE_ROUTES)
+def test_a_powerful_role_is_refused_up_front(client, role_queues, monkeypatch, path):
+    """A 403 rather than "queued", so PlatPursuit logs the refusal instead of it vanishing."""
+    _cache_role(monkeypatch, fake_role(manage_threads=True))
+    resp = client.post(path, json=ROLE_BODY, headers=AUTH)
+    assert resp.status_code == 403
+    assert 'manage_threads' in resp.json()['detail']
+    assert role_queues[path].empty()
+
+
+@pytest.mark.parametrize('path', ROLE_ROUTES)
+def test_a_plain_cached_role_is_queued(client, role_queues, monkeypatch, path):
+    _cache_role(monkeypatch, fake_role())
+    assert client.post(path, json=ROLE_BODY, headers=AUTH).status_code == 200
+    assert role_queues[path].qsize() == 1
 
 
 async def test_api_calls_have_a_timeout():
@@ -246,15 +290,14 @@ async def test_a_mod_command_refuses_a_member_without_the_permission(command, re
     await _run_checks(command, required)
 
 
-def _interaction(done, command=None):
-    interaction = MagicMock(spec=discord.Interaction)
-    interaction.response = MagicMock()
-    interaction.response.is_done.return_value = done
-    interaction.response.send_message = AsyncMock()
-    interaction.followup = MagicMock()
-    interaction.followup.send = AsyncMock()
-    interaction.command = command
-    return interaction
+@pytest.fixture
+def make_interaction(interaction_factory):
+    def make(done, command=None):
+        interaction = interaction_factory()
+        interaction.response.is_done = MagicMock(return_value=done)
+        interaction.command = command
+        return interaction
+    return make
 
 
 def _sender(interaction, done):
@@ -262,40 +305,53 @@ def _sender(interaction, done):
 
 
 @pytest.mark.parametrize('done', [False, True])
-async def test_a_failed_check_gets_a_private_reply(done):
-    interaction = _interaction(done)
+async def test_a_failed_check_gets_a_private_reply(make_interaction, done):
+    interaction = make_interaction(done)
     await handle_app_command_error(interaction, app_commands.MissingPermissions(['manage_messages']))
     _sender(interaction, done).assert_awaited_once_with(NO_PERMISSION_MESSAGE, ephemeral=True)
 
 
-async def test_a_cooldown_says_so_rather_than_no_permission():
-    interaction = _interaction(False)
+async def test_a_cooldown_says_so_rather_than_no_permission(make_interaction):
+    interaction = make_interaction(False)
     cooldown = app_commands.Cooldown(1, 30)
     await handle_app_command_error(interaction, app_commands.CommandOnCooldown(cooldown, 4.2))
     interaction.response.send_message.assert_awaited_once_with(COOLDOWN_MESSAGE.format(seconds=5), ephemeral=True)
 
 
 @pytest.mark.parametrize('done', [False, True])
-async def test_other_errors_are_logged_and_answered(caplog, done):
+async def test_other_errors_are_logged_and_answered(make_interaction, caplog, done):
     """A command that raises would otherwise leave its deferred reply on "thinking..." forever."""
-    interaction = _interaction(done)
+    interaction = make_interaction(done)
     await handle_app_command_error(interaction, app_commands.AppCommandError('boom'))
     _sender(interaction, done).assert_awaited_once_with(FAILED_MESSAGE, ephemeral=True)
     assert 'Unhandled error' in caplog.text
 
 
-async def test_a_command_with_its_own_handler_is_left_alone():
+async def test_a_command_with_its_own_handler_is_left_alone(make_interaction):
     """/trophystats answers its own cooldowns; a second reply would contradict it."""
     cog = CommunityStatsCog(MagicMock())
     command = next(c for c in cog.walk_app_commands() if isinstance(c, app_commands.Command))
-    interaction = _interaction(True, command=command)
+    interaction = make_interaction(True, command=command)
     await handle_app_command_error(interaction, app_commands.CommandOnCooldown(app_commands.Cooldown(1, 30), 4.2))
     interaction.followup.send.assert_not_awaited()
     interaction.response.send_message.assert_not_awaited()
 
 
-async def test_an_expired_interaction_does_not_raise(caplog):
-    interaction = _interaction(False)
+async def test_an_expired_interaction_does_not_raise(make_interaction, caplog):
+    interaction = make_interaction(False)
     interaction.response.send_message.side_effect = discord.NotFound(MagicMock(status=404), 'Unknown interaction')
     await handle_app_command_error(interaction, app_commands.MissingPermissions(['manage_messages']))
     assert 'Could not send the error reply' in caplog.text
+
+
+def test_the_handler_is_the_trees():
+    assert bot.bot.tree.on_error is handle_app_command_error
+
+
+async def test_a_group_subcommand_without_its_own_handler_is_answered(make_interaction):
+    """/note add has no cog handler, so the tree handler must answer its failed check."""
+    cog = NotesCog(MagicMock())
+    command = next(c for c in cog.walk_app_commands() if c.qualified_name == 'note add')
+    interaction = make_interaction(False, command=command)
+    await handle_app_command_error(interaction, app_commands.MissingPermissions(['manage_messages']))
+    interaction.response.send_message.assert_awaited_once_with(NO_PERMISSION_MESSAGE, ephemeral=True)

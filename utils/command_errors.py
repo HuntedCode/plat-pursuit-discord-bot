@@ -20,12 +20,13 @@ FAILED_MESSAGE = 'Something went wrong. Please try again later.'
 _PERMISSION_ERRORS = (app_commands.MissingPermissions, app_commands.MissingRole, app_commands.MissingAnyRole)
 
 
-def _reply_for(error: app_commands.AppCommandError) -> str:
+def _reply_for(error: app_commands.AppCommandError) -> str | None:
+    """The reply for an expected error, or None for one that is a bug."""
     if isinstance(error, _PERMISSION_ERRORS):
         return NO_PERMISSION_MESSAGE
     if isinstance(error, app_commands.CommandOnCooldown):
         return COOLDOWN_MESSAGE.format(seconds=int(error.retry_after) + 1)
-    return FAILED_MESSAGE
+    return None
 
 
 async def handle_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError) -> None:
@@ -37,8 +38,9 @@ async def handle_app_command_error(interaction: discord.Interaction, error: app_
         return
     name = command.qualified_name if command else '?'
     message = _reply_for(error)
-    if message is FAILED_MESSAGE:
+    if message is None:
         logger.error(f"Unhandled error in /{name}", exc_info=error)
+        message = FAILED_MESSAGE
     try:
         if interaction.response.is_done():
             await interaction.followup.send(message, ephemeral=True)

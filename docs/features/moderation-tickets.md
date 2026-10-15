@@ -39,7 +39,7 @@ If the toggle is on but `TICKET_CATEGORY_ID` is missing/invalid, opening a ticke
 ### Entry points
 
 - **`/ticket`** slash command, usable anywhere in the server (self-serve).
-- **A persistent panel**: an embed with an "Open a Ticket" button. A mod posts it with **`/ticket_panel`** (mod-only, gated by `manage_messages`), which drops the panel into `TICKET_CHANNEL_ID`.
+- **A persistent panel**: an embed with an "Open a Ticket" button. A mod posts it with **`/ticket_panel`** (mod-only: hidden from members without `manage_messages`, and checked again each time it runs, like every mod command), which drops the panel into `TICKET_CHANNEL_ID`.
 - **`/ticket_user`** (mod-only): a moderator opens a ticket and **pulls in** a target user, plus up to two more (`user2`, `user3`), with an optional `reason`.
 
 All routes build the channel through the shared `_create_ticket` helper.

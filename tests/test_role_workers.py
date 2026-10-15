@@ -150,3 +150,96 @@ async def test_a_member_who_left_is_dropped(server, waits, caplog):
 
     assert 'Member not found' in caplog.text
     assert waits == []
+
+
+async def test_a_missing_guild_or_role_is_dropped(server, waits, caplog, monkeypatch):
+    member, _ = server
+    await bot.apply_role_change({**REQUEST, 'guild_id': 999}, adding=True)
+    assert 'Guild not found' in caplog.text
+
+    bot.bot.get_guild(HOME_GUILD).get_role.return_value = None
+    await bot.apply_role_change(REQUEST, adding=True)
+    assert 'Role not found' in caplog.text
+    member.add_roles.assert_not_awaited()
+    assert waits == []
+
+
+@pytest.mark.parametrize('header', [None, 'Wed, 21 Oct 2026 07:28:00 GMT', 'soon'])
+async def test_a_missing_or_unreadable_retry_after_uses_the_default(server, waits, header):
+    """An HTTP-date Retry-After used to raise inside the except block and end the worker."""
+    member, _ = server
+    error = http_error(429)
+    if header is None:
+        error.response.headers = {}
+    else:
+        error.response.headers = {'Retry-After': header}
+    member.add_roles.side_effect = [error, None]
+
+    await bot.apply_role_change(REQUEST, adding=True)
+
+    assert waits == [bot.DEFAULT_RETRY_AFTER_SECONDS + bot.RETRY_AFTER_MARGIN_SECONDS]
+    assert member.add_roles.await_count == 2
+
+
+async def test_no_wait_after_the_last_rate_limit(server, waits, caplog):
+    member, _ = server
+    member.add_roles.side_effect = http_error(429, retry_after='2')
+
+    await bot.apply_role_change(REQUEST, adding=True)
+
+    assert member.add_roles.await_count == bot.ROLE_MAX_ATTEMPTS
+    assert len(waits) == bot.ROLE_MAX_ATTEMPTS - 1
+    assert 'Gave up' in caplog.text
+
+
+async def test_a_bug_is_logged_with_its_traceback_and_not_retried(server, waits, caplog):
+    """Only network errors are worth a retry; retrying a bug just stalls the queue."""
+    member, _ = server
+    member.add_roles.side_effect = AttributeError('a bug')
+
+    await bot.apply_role_change(REQUEST, adding=True)
+
+    assert member.add_roles.await_count == 1
+    assert waits == []
+    record = next(r for r in caplog.records if 'failed unexpectedly' in r.getMessage())
+    assert record.exc_info is not None
+
+
+async def test_removal_retries_a_server_error_too(server, waits):
+    member, role = server
+    member.remove_roles.side_effect = [http_error(502), None]
+
+    await bot.apply_role_change(REQUEST, adding=False)
+
+    member.remove_roles.assert_awaited_with(role)
+    assert waits == [1]
+
+
+async def test_the_worker_survives_a_failing_request(monkeypatch, caplog):
+    """A dead worker would silently stop every role change until a restart, and hang a backfill
+    waiting on queue.join()."""
+    import asyncio
+    from contextlib import suppress
+
+    calls = []
+
+    async def apply(data, adding):
+        calls.append(data)
+        if data == 'boom':
+            raise RuntimeError('unexpected')
+
+    monkeypatch.setattr(bot, 'apply_role_change', apply)
+    monkeypatch.setattr(bot, 'ROLE_QUEUE_PAUSE_SECONDS', 0)
+    queue = asyncio.Queue()
+    task = asyncio.create_task(bot._role_worker(lambda: queue, adding=True))
+    try:
+        await queue.put('boom')
+        await queue.put(REQUEST)
+        await asyncio.wait_for(queue.join(), timeout=2)
+    finally:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+    assert calls == ['boom', REQUEST], 'the worker carried on after the failure'
+    assert 'Role worker failed' in caplog.text

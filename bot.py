@@ -13,7 +13,7 @@ import hmac
 import uuid
 from collections.abc import Callable
 from urllib.parse import urlparse
-from aiohttp import BasicAuth, ClientSession, ClientTimeout
+from aiohttp import BasicAuth, ClientError, ClientSession, ClientTimeout
 from pydantic import BaseModel
 from db.engine import init_db
 from utils.command_errors import handle_app_command_error
@@ -35,14 +35,20 @@ ROLE_MAX_ATTEMPTS = 5
 ROLE_RETRY_BASE_SECONDS = 1
 #: Pause between queue items, so a bulk sweep stays under Discord's rate limits.
 ROLE_QUEUE_PAUSE_SECONDS = 0.5
+#: Wait when a 429's Retry-After is missing or unreadable, and the margin added to it.
+DEFAULT_RETRY_AFTER_SECONDS = 1.0
+RETRY_AFTER_MARGIN_SECONDS = 0.5
+#: Failures worth a retry besides Discord's 5xx: a dropped connection or a timeout (asyncio's
+#: TimeoutError is an OSError). Anything else is a bug, logged with its traceback and dropped.
+_TRANSIENT_ERRORS = (OSError, ClientError)
 
 
-async def apply_role_change(data: dict, adding: bool) -> None:
+async def apply_role_change(data: dict[str, int], adding: bool) -> None:
     """Add or remove one role, retrying what can succeed later and dropping what cannot.
 
     A 429 waits for Discord's Retry-After. A 5xx or a network error waits 1s, 2s, 4s... A 4xx
     (the role sits above the bot's, a missing permission) cannot succeed on retry, so it is logged
-    once and dropped.
+    once and dropped, as is any other exception (a bug), with its traceback.
     """
     verb = 'assign' if adding else 'remove'
     user_id = data.get('user_id')
@@ -79,20 +85,33 @@ async def apply_role_change(data: dict, adding: bool) -> None:
             return
         except discord.HTTPException as e:
             if e.status == 429:
-                retry_after = float(e.response.headers.get('Retry-After', 1))
-                logger.warning(f"Rate limited (429) on role {verb}. Retrying after {retry_after} seconds.")
-                await asyncio.sleep(retry_after + 0.5)
+                retry_after = _retry_after_seconds(e)
+                logger.warning(f"Rate limited (429) on role {verb}; Retry-After {retry_after}s.")
+                if attempt < ROLE_MAX_ATTEMPTS:
+                    await asyncio.sleep(retry_after + RETRY_AFTER_MARGIN_SECONDS)
             elif e.status >= 500:
                 await _wait_before_retry(f"Discord {e.status} on role {verb}", attempt)
             else:
                 logger.error(f"Role {verb} failed with Discord {e.status}, not retrying: {e}")
                 return
-        except Exception as e:
-            await _wait_before_retry(f"Error on role {verb} ({e!r})", attempt)
+        except _TRANSIENT_ERRORS as e:
+            await _wait_before_retry(f"Network error on role {verb} ({e!r})", attempt)
+        except Exception:
+            logger.exception(f"Role {verb} failed unexpectedly, not retrying: {data}")
+            return
     logger.error(f"Gave up on role {verb} after {ROLE_MAX_ATTEMPTS} attempts: {data}")
 
 
+def _retry_after_seconds(error: discord.HTTPException) -> float:
+    """A 429's Retry-After, or the default when it is missing or not a number (an HTTP date)."""
+    try:
+        return float(error.response.headers.get('Retry-After', DEFAULT_RETRY_AFTER_SECONDS))
+    except (TypeError, ValueError):
+        return DEFAULT_RETRY_AFTER_SECONDS
+
+
 async def _wait_before_retry(what: str, attempt: int) -> None:
+    """Back off before the next attempt: 1s, 2s, 4s... and no wait after the last one."""
     if attempt < ROLE_MAX_ATTEMPTS:
         wait = ROLE_RETRY_BASE_SECONDS * 2 ** (attempt - 1)
         logger.warning(f"{what}. Retrying in {wait}s (attempt {attempt} of {ROLE_MAX_ATTEMPTS}).")
@@ -108,6 +127,10 @@ async def _role_worker(get_queue: Callable[[], asyncio.Queue], adding: bool) -> 
         data = await queue.get()
         try:
             await apply_role_change(data, adding)
+        except Exception:
+            # Never let one request end the worker: a dead worker silently stops every role change
+            # until the bot restarts, and a backfill waiting on queue.join() would hang.
+            logger.exception(f"Role worker failed on {data!r}")
         finally:
             queue.task_done()
         await asyncio.sleep(ROLE_QUEUE_PAUSE_SECONDS)

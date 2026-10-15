@@ -63,11 +63,14 @@ Role assignments and removals go through two async queues (`role_queue`, `role_r
 
 | Discord answers | The worker |
 |---|---|
-| 429 | Waits for `Retry-After`, then tries again |
+| 429 | Waits for `Retry-After` (1s if it is missing or unreadable), then tries again |
 | 5xx, or a network error | Waits 1s, 2s, 4s, 8s between attempts (`ROLE_RETRY_BASE_SECONDS`) |
 | Any other 4xx (the role sits above the bot's, a missing permission) | Logs it once and drops the request: a retry cannot succeed |
+| Any other exception (a bug) | Logs it with its traceback and drops the request |
 
-Every change gets `ROLE_MAX_ATTEMPTS` (5) attempts, a 429 included; only a request that runs out logs "Gave up". Tests: `tests/test_role_workers.py`.
+Every change gets `ROLE_MAX_ATTEMPTS` (5) attempts, a 429 included; only a request that runs out logs "Gave up". The worker loop itself catches anything a request raises, so one bad request can never end it (a dead worker would stop every role change until a restart, and hang the backfill's `queue.join()`). Tests: `tests/test_role_workers.py`.
+
+These retries sit on top of discord.py's own: the library already retries 429s and Discord's 500/502/504 itself before raising. So a 429 or 5xx that reaches the worker has outlasted those, and a persistent outage can hold one queue item for a couple of minutes.
 
 ### Database
 

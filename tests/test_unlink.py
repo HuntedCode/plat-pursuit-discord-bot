@@ -7,7 +7,7 @@ command first and then invoke the button's callback off the View it sent.
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aioresponses import aioresponses
+from tests.fake_api import mock_api
 
 from commands.unlink import UnlinkCog
 from utils.roles import RoleSwapError
@@ -25,7 +25,7 @@ def unlink_bot(api_bot):
 
 async def open_confirm(cog, interaction) -> AsyncMock:
     """Run /unlink for a linked user and return its 'Yes, Unlink' callback."""
-    with aioresponses() as mocked:
+    with mock_api(cog.bot) as mocked:
         mocked.get(
             'https://api.test/check-linked/?discord_id=7',
             payload={'linked': True, 'psn_username': 'CoolPSN'},
@@ -54,7 +54,7 @@ async def test_confirm_defers_then_reports_success(unlink_bot, user_factory, int
     confirm = await open_confirm(cog, interaction_factory(user=user_factory(7)))
     press = button_interaction(user_factory(7))
 
-    with aioresponses() as mocked:
+    with mock_api(cog.bot) as mocked:
         mocked.post('https://api.test/unlink/', payload={'success': True})
         await confirm(press)
 
@@ -73,7 +73,7 @@ async def test_confirm_surfaces_role_swap_failure(unlink_bot, user_factory, inte
     confirm = await open_confirm(cog, interaction_factory(user=user_factory(7)))
     press = button_interaction(user_factory(7))
 
-    with aioresponses() as mocked:
+    with mock_api(cog.bot) as mocked:
         mocked.post('https://api.test/unlink/', payload={'success': True})
         await confirm(press)
 
@@ -87,7 +87,7 @@ async def test_confirm_skips_role_swap_when_api_fails(unlink_bot, user_factory, 
     confirm = await open_confirm(cog, interaction_factory(user=user_factory(7)))
     press = button_interaction(user_factory(7))
 
-    with aioresponses() as mocked:
+    with mock_api(cog.bot) as mocked:
         mocked.post('https://api.test/unlink/', status=500)
         await confirm(press)
 

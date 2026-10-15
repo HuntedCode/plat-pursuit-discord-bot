@@ -8,7 +8,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from aioresponses import aioresponses
+from tests.fake_api import mock_api
 
 from commands.link import LinkCog
 from utils.roles import RoleSwapError
@@ -26,7 +26,7 @@ def link_bot(api_bot):
 
 async def open_verify(cog, interaction):
     """Run /link and return its 'Verify Now' callback."""
-    with aioresponses() as mocked:
+    with mock_api(cog.bot) as mocked:
         mocked.post('https://api.test/generate-code/', payload={'code': 'ABC123'})
         await LinkCog.link.callback(cog, interaction, 'coolpsn')
     view = interaction.followup.send.call_args.kwargs['view']
@@ -56,7 +56,7 @@ async def test_verify_success_swaps_roles_and_syncs(link_bot, user_factory, inte
     press = button_interaction(user_factory(7))
 
     verify = await open_verify(cog, interaction_factory(user=user_factory(7)))
-    with aioresponses() as mocked:
+    with mock_api(cog.bot) as mocked:
         mocked.post('https://api.test/verify/', payload={'success': True, 'psn_username': 'CoolPSN'})
         await verify(press)
         await asyncio.sleep(0)  # let the fire-and-forget sync task start
@@ -81,7 +81,7 @@ async def test_role_swap_failure_still_syncs_and_clears_the_button(link_bot, use
     press = button_interaction(user_factory(7))
 
     verify = await open_verify(cog, interaction_factory(user=user_factory(7)))
-    with aioresponses() as mocked:
+    with mock_api(cog.bot) as mocked:
         mocked.post('https://api.test/verify/', payload={'success': True})
         await verify(press)
         await asyncio.sleep(0)
@@ -101,7 +101,7 @@ async def test_dispatch_falls_back_to_the_submitted_psn_name(link_bot, user_fact
     press = button_interaction(user_factory(7))
 
     verify = await open_verify(cog, interaction_factory(user=user_factory(7)))
-    with aioresponses() as mocked:
+    with mock_api(cog.bot) as mocked:
         mocked.post('https://api.test/verify/', payload={'success': True})
         await verify(press)
         await asyncio.sleep(0)
@@ -116,7 +116,7 @@ async def test_failed_verification_does_not_touch_roles(link_bot, user_factory, 
     press = button_interaction(user_factory(7))
 
     verify = await open_verify(cog, interaction_factory(user=user_factory(7)))
-    with aioresponses() as mocked:
+    with mock_api(cog.bot) as mocked:
         mocked.post('https://api.test/verify/', payload={'success': False, 'message': 'Code not found'})
         await verify(press)
 

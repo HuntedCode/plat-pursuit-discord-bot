@@ -4,7 +4,7 @@ PlatBot has no packaging, so the project root must be importable for `import db`
 `import commands.*`, `import utils.*` to resolve in tests. Having this conftest at the
 root puts the root on sys.path (pytest prepend import mode); the explicit insert below
 makes that guarantee obvious. Outbound HTTP (the PlatPursuit API) is mocked at the
-aiohttp boundary with aioresponses; Discord interactions are mocked with AsyncMock.
+session boundary with tests/fake_api.py; Discord interactions are mocked with AsyncMock.
 """
 
 import sys
@@ -78,12 +78,10 @@ async def notes_bot(db_sessionmaker):
 
 @pytest_asyncio.fixture
 async def api_bot():
-    """A minimal bot with a real aiohttp session (intercepted by aioresponses) + api_base_url."""
-    import aiohttp
+    """A minimal bot with a fake API session (register responses with tests.fake_api.mock_api)."""
+    from tests.fake_api import FakeApiSession
 
     bot = MagicMock(name='Bot')
     bot.api_base_url = 'https://api.test/'
-    session = aiohttp.ClientSession()
-    bot.api_session = session
+    bot.api_session = FakeApiSession()
     yield bot
-    await session.close()

@@ -44,14 +44,6 @@ async def role_assignment_worker():
                     logger.error(f"Guild not found: {guild_id}")
                     break
 
-                member = guild.get_member(user_id)
-                if not member:
-                    try:
-                        member = await guild.fetch_member(user_id)
-                    except discord.NotFound:
-                        logger.error(f"Member not found: {user_id} in guild {guild_id}")
-                        break
-
                 role = guild.get_role(role_id)
                 if not role:
                     logger.error(f"Role not found: {role_id} in guild {guild_id}")
@@ -59,6 +51,14 @@ async def role_assignment_worker():
                 if reason := refusal_reason(role):
                     logger.warning(f"Refused to assign role {role.name} ({role_id}): {reason}")
                     break
+
+                member = guild.get_member(user_id)
+                if not member:
+                    try:
+                        member = await guild.fetch_member(user_id)
+                    except discord.NotFound:
+                        logger.error(f"Member not found: {user_id} in guild {guild_id}")
+                        break
 
                 await member.add_roles(role)
                 logger.info(f"Assigned role {role.name} to {member.name} in guild {guild_id}")
@@ -97,14 +97,6 @@ async def role_removal_worker():
                     logger.error(f"Guild not found: {guild_id}")
                     break
 
-                member = guild.get_member(user_id)
-                if not member:
-                    try:
-                        member = await guild.fetch_member(user_id)
-                    except discord.NotFound:
-                        logger.error(f"Member not found: {user_id} in guild {guild_id}")
-                        break
-
                 role = guild.get_role(role_id)
                 if not role:
                     logger.error(f"Role not found: {role_id} in guild {guild_id}")
@@ -112,6 +104,14 @@ async def role_removal_worker():
                 if reason := refusal_reason(role):
                     logger.warning(f"Refused to remove role {role.name} ({role_id}): {reason}")
                     break
+
+                member = guild.get_member(user_id)
+                if not member:
+                    try:
+                        member = await guild.fetch_member(user_id)
+                    except discord.NotFound:
+                        logger.error(f"Member not found: {user_id} in guild {guild_id}")
+                        break
 
                 if role not in member.roles:
                     logger.info(f"Member {member.name} does not have role {role.name}, skipping removal")
@@ -209,7 +209,7 @@ def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)
     if not hmac.compare_digest(credentials.credentials, API_KEY):
         raise HTTPException(status_code=401, detail='Invalid API key')
 
-def require_home_guild(data: RoleRequest):
+def require_home_guild(data: RoleRequest) -> None:
     """Role requests may only target this bot's own server (PlatPursuit never sends another).
 
     The workers also refuse any role that carries power (utils/role_guard.py), so a leaked API
@@ -382,7 +382,7 @@ async def check_proxy_ip():
 #: aiohttp waits up to five minutes, leaving a slash command hanging well past Discord's patience.
 API_TIMEOUT_SECONDS = 30
 
-def make_api_session(headers):
+def make_api_session(headers: dict[str, str]) -> ClientSession:
     return ClientSession(headers=headers, timeout=ClientTimeout(total=API_TIMEOUT_SECONDS))
 
 async def main():

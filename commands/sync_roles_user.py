@@ -45,7 +45,7 @@ class SyncRolesUserCog(commands.Cog):
                 else:
                     await interaction.followup.send('API error. Please try again later.', ephemeral=True)
         except Exception as e:
-            logger.error(f"sync_roles_user command error for {target_discord_id}: {e}")
+            logger.error(f"sync_roles_user command error for {target_discord_id}: {e!r}")
             await interaction.followup.send('An unexpected error occurred. Please try again later.', ephemeral=True)
 
 async def setup(bot):

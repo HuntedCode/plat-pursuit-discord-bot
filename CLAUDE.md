@@ -40,7 +40,7 @@ PlatBot runs two services in the same process:
 - All API calls go through `API_BASE_URL` with `API_KEY` header authentication
 - Key API endpoints consumed: `generate-code/`, `verify/`, `summary/`, `trophy-case/`, `sync-roles/`, `refresh/`, `unlink/`, `check-linked/`, `recheck-badges/`, `community-stats/today/`, `community-stats/<date>/`, `community-stats/records/`
 - PlatPursuit triggers role operations by calling PlatBot's `/assign-role` and `/remove-role` FastAPI endpoints
-- Outbound API calls share one `aiohttp` session built by `make_api_session`, with a total timeout of `API_TIMEOUT_SECONDS` (30), so a hung PlatPursuit request fails instead of stalling a command forever
+- Outbound API calls share one `aiohttp` session built by `make_api_session`, with a total timeout of `API_TIMEOUT_SECONDS` (30), so a hung PlatPursuit request fails instead of stalling a command forever (the tree error handler then tells the user something went wrong). `/recheck_badges_user` passes its own longer `RECHECK_TIMEOUT` (120), because a full recheck evaluates every badge in one request
 
 ### Webhook API Limits
 
@@ -50,9 +50,11 @@ The FastAPI server is public, so it is built to stay safe even if `API_KEY` leak
 |-------|-------|-----|
 | No `/docs`, `/redoc` or `/openapi.json` | `FastAPI(docs_url=None, ...)` in `bot.py` | Nothing advertises the routes or their bodies |
 | Home server only | `require_home_guild` in `bot.py` | A role request naming another `guild_id` gets 403. PlatPursuit sends no `guild_id`, which means the home server |
-| No powerful roles | `utils/role_guard.refusal_reason`, checked by both role workers | The bot never adds or removes @everyone, an integration-managed role, or any role granting a permission in `PRIVILEGED_PERMISSIONS` (administrator, manage_*, kick, ban, timeout, voice moderation, mention_everyone, audit log). Refusals are logged as warnings |
+| No powerful roles | `utils/role_guard.refusal_reason`, checked by both role workers | The bot never adds or removes @everyone, an integration-managed role, or any role granting a permission in `PRIVILEGED_PERMISSIONS` (administrator, manage_*, kick, ban, timeout, voice moderation, mention_everyone, audit log, insights), server-wide or through any channel's overwrites. Unlocking a private channel is allowed (premium channels need it). The role is checked before the member is looked up, so a refused request costs no Discord API calls. Refusals are logged as warnings |
 
-A new role route must call `require_home_guild` first, and anything that changes roles must go through the workers so the role guard applies.
+A new role route must call `require_home_guild` first, and any role change the webhook API triggers must go through the workers so the role guard applies. (Role changes a user triggers themselves, like the Verified swap in `utils/roles.py`, call Discord directly.)
+
+`PRIVILEGED_PERMISSIONS` is a list of named flags, so a permission Discord adds later is allowed until it is named here. discord.py 2.6.4 has no name yet for Discord's `PIN_MESSAGES` (1 << 51) and `BYPASS_SLOWMODE` (1 << 52); add them when it does.
 
 ### Worker Queue System
 
@@ -131,7 +133,7 @@ PlatBot/
 - User-facing responses are ephemeral (visible only to the invoking user) unless displaying public data
 - Confirmation flows use `discord.ui.View` with button components
 - Paginated displays (trophy case) use button-based navigation views
-- **Mod commands check permissions twice.** `@app_commands.default_permissions(...)` only hides a command, and a server admin can widen it in Server Settings > Integrations. So every mod command also carries `@app_commands.checks.has_permissions(...)` with the same permission, which runs on each use. A failed check is answered privately by `utils/command_errors.handle_app_command_error` (set as `bot.tree.on_error`). Add new mod commands to `MOD_COMMANDS` in `tests/test_hardening.py`
+- **Mod commands check permissions twice.** `@app_commands.default_permissions(...)` only hides a command, and a server admin can widen it in Server Settings > Integrations. So every mod command also carries `@app_commands.checks.has_permissions(...)` with the same permission, which runs on each use. A failed check is answered privately by `utils/command_errors.handle_app_command_error` (set as `bot.tree.on_error`), which also answers cooldowns and any other error a command leaves unhandled. It steps aside for a command that has its own handler (a `cog_app_command_error`, as in `community_stats.py`), since discord.py calls the tree handler after it. `tests/test_hardening.py` finds every command with `default_permissions` on its own and fails if one lacks the runtime check
 
 ### Cog Structure
 

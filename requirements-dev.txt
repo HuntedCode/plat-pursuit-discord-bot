@@ -3,8 +3,8 @@
 # requirements.txt). Install locally with:  pip install -r requirements-dev.txt
 -r requirements.txt
 
-pytest==8.3.4
-pytest-asyncio==0.24.0       # async test + fixture support (discord.py / SQLAlchemy are async)
-aiosqlite==0.20.0            # SQLite driver for local dev and the test DB (production uses asyncpg)
+pytest==9.1.1
+pytest-asyncio==1.4.0       # async test + fixture support (discord.py / SQLAlchemy are async)
+aiosqlite==0.22.1            # SQLite driver for local dev and the test DB (production uses asyncpg)
 httpx==0.28.1                # transport for FastAPI's TestClient in the API tests
 pip-audit==2.10.1            # dependency advisory gate; CI runs it on requirements.txt

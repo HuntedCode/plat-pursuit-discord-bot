@@ -17,7 +17,7 @@
 | Layer             | Technology                          |
 | ----------------- | ----------------------------------- |
 | Language          | Python 3.12                         |
-| Bot Framework     | discord.py 2.6.x                    |
+| Bot Framework     | discord.py 2.7.x                    |
 | Web Server        | FastAPI + Uvicorn (webhook receiver) |
 | HTTP Client       | aiohttp (async API calls)           |
 | Validation        | Pydantic                            |
@@ -55,7 +55,7 @@ The FastAPI server is public, so it is built to stay safe even if `API_KEY` leak
 
 A new role route must call `require_home_guild` and `require_api_togglable_role` first, and any role change the webhook API triggers must go through the workers so the role guard applies. (Role changes a user triggers themselves, like the Verified swap in `utils/roles.py`, call Discord directly.)
 
-`PRIVILEGED_PERMISSIONS` is a list of named flags, so a permission Discord adds later is allowed until it is named here. Two that discord.py 2.6.4 cannot name yet, `pin_messages` (1 << 51) and `bypass_slowmode` (1 << 52), are refused by bit through `UNNAMED_PRIVILEGED_BITS`, but on the role itself only: discord.py drops unnamed bits when it builds a channel overwrite. A test fails once discord.py names them, as the cue to move them into `PRIVILEGED_PERMISSIONS`.
+`PRIVILEGED_PERMISSIONS` is a list of named flags, so a permission Discord adds later is allowed until it is named here. When a discord.py upgrade names a new moderation permission, add it (2.7 named `pin_messages` and `bypass_slowmode`, which arrived in 2025). Only names discord.py knows can be checked: it drops unnamed bits when it builds a channel overwrite.
 
 ### Worker Queue System
 
@@ -222,7 +222,7 @@ pytest                                  # run the suite
 | Production requirements | `requirements.txt` | Fully pinned, transitive dependencies included, so the audit sees exactly what ships. Python 3.12 (the Docker image). |
 | Dev and test tools | `requirements-dev.txt` | `-r requirements.txt` plus pytest, `aiosqlite` (the SQLite driver for local dev and tests; production uses asyncpg), `httpx` (TestClient) and `pip-audit`. |
 | CI | `.github/workflows/check.yml` | On every PR, push to main and weekly on main: **Tests** (pytest), **Dependency audit** (`pip-audit -r requirements.txt --no-deps`, then a pin check: install the pins with `--no-deps` and run `pip check`), **Secret scan** (gitleaks over the full history). |
-| Dependabot | `.github/dependabot.yml` | Security PRs as soon as an advisory is published (enable "Dependabot security updates" in the repository settings), plus one grouped pip PR and one grouped GitHub Actions PR with every minor and patch update on the 1st of each month. Each major update opens its own PR. A reminder issue for the monthly review opens on the 2nd. |
+| Dependabot | `.github/dependabot.yml` | Security PRs as soon as an advisory is published (enable "Dependabot security updates" in the repository settings), plus one grouped pip PR and one grouped GitHub Actions PR with every minor and patch update on the 1st of each month (`tzdata`, whose date versions look like a major every year, rides a second group). Each major update opens its own PR. A reminder issue for the monthly review opens on the 2nd. |
 
 **After any change to `requirements.txt`**, CI's pin check fails if a package is missing a pin or a pin is out of range. To find the right pins, install it into a clean Python 3.12 environment (for example `docker run --rm -v "$PWD:/src" python:3.12-slim pip install -r /src/requirements.txt`) and compare `pip freeze` with the pins: every installed package must be pinned (or the audit cannot see it) and every pin installed. A Dependabot bump of one package can need a new transitive pin; FastAPI 0.143 added `opentelemetry-api`, for one.
 
@@ -233,6 +233,7 @@ pytest                                  # run the suite
 - **Audit on Python 3.12, not the local venv's Python.** Production runs 3.12; resolving on another version can pick different transitive versions.
 - **`colorama` is pinned with a Windows-only marker** (`; sys_platform == "win32"`): `click` and `uvicorn` only need it on Windows, so the Linux image skips it and a clean-install comparison lists it as "pinned but not installed". That is expected.
 - **A test HTTP mock that builds aiohttp internals breaks on aiohttp upgrades.** That is why `tests/fake_api.py` mocks the session's public surface instead.
+- **Some Dependabot PRs cannot pass alone.** Each major is its own PR, but some only work together (pytest 9 and pytest-asyncio 1.x need each other), and some wait on another package (aiohttp 3.14 caps `multidict` below 7). Combine the first kind on one branch; close the second with `@dependabot ignore this major version` and revisit when the blocker moves. A grouped PR can also need a pin it did not add: feedparser 6.0.14 swapped `sgmllib3k` for `feedparser-sgmllib`, which the pin check caught.
 - **CI's pip-audit version comes from `requirements-dev.txt`.** Bump it there (Dependabot does), not in `check.yml`.
 - **GitHub turns off the weekly scheduled run after 60 days with no commits.** If the repo goes quiet, re-enable it under Actions > Check, or the weekly advisory check silently stops (Dependabot alerts still arrive).
 - **Deprecations to plan for:** aiohttp 3.14 deprecates `BasicAuth` (the proxy auth in `bot.py`; aiohttp 4 removes it), and Starlette 1.3 warns that `TestClient` on `httpx` should move to `httpx2`. Both only warn today.

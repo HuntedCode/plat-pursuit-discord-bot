@@ -11,6 +11,10 @@ updates:
     schedule:
       interval: monthly
     groups:
+      # tzdata's date versions look like a major update every year; it rides the monthly group
+      # whatever the version jump. A package matches the first group that fits, so this comes first.
+      pip-date-versioned:
+        patterns: [tzdata]
       pip-monthly:
         patterns: ['*']
         update-types: [minor, patch]

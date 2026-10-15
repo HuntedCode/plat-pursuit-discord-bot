@@ -5,4 +5,6 @@
 
 pytest==8.3.4
 pytest-asyncio==0.24.0       # async test + fixture support (discord.py / SQLAlchemy are async)
-aioresponses==0.7.6          # mock outbound aiohttp calls (the PlatPursuit API) at the boundary
+aiosqlite==0.20.0            # SQLite driver for local dev and the test DB (production uses asyncpg)
+httpx==0.28.1                # transport for FastAPI's TestClient in the API tests
+pip-audit==2.10.1            # dependency advisory gate; CI runs it on requirements.txt

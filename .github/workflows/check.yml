@@ -50,6 +50,15 @@ jobs:
       # record why in CLAUDE.md (Dependencies and CI); an ignore without a reason is a bug.
       - run: pip install pip-audit==2.10.1
       - run: pip-audit -r requirements.txt --no-deps --disable-pip --progress-spinner off
+      # The audit only sees pinned packages, so every package the image installs must be pinned.
+      # A bump (a Dependabot one included) can need a new or changed transitive pin: installing
+      # the pins with no dependency resolution, then `pip check`, fails if any is missing or out
+      # of range.
+      - name: Check the pins
+        run: |
+          python -m venv /tmp/pins
+          /tmp/pins/bin/pip install --quiet --disable-pip-version-check --no-deps -r requirements.txt
+          /tmp/pins/bin/pip check
 
   secret-scan:
     name: Secret scan

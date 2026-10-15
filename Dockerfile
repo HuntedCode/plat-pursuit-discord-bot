@@ -11,4 +11,7 @@ COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY . .
 ENV PYTHONUNBUFFERED=1
+# Run as an unprivileged user: the bot writes nothing to disk, so it needs no write access.
+RUN useradd --system --no-create-home --uid 10001 platbot
+USER platbot
 CMD ["python", "bot.py"]

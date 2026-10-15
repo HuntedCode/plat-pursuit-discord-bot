@@ -5,12 +5,15 @@ __pycache__
 .Python
 env/
 venv/
+.venv/
 *.env
 *.db
 staticfiles/
 media/
 .git/
 .gitignore
+.github/
+.claude/
 tests/
 conftest.py
 requirements-dev.txt

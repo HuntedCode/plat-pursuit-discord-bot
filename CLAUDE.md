@@ -186,11 +186,11 @@ pip install -r requirements-dev.txt   # pulls -r requirements.txt + test deps
 pytest                                  # run the suite
 ```
 
-- **Where**: tests live in `tests/`; shared fixtures (FakeUser, mock-interaction factory, in-memory DB sessionmaker, API-bot) are in `conftest.py`.
+- **Where**: tests live in `tests/`; shared fixtures (FakeUser, mock-interaction factory, in-memory DB sessionmaker, API-bot, webhook `TestClient` with fresh role queues) are in `conftest.py`.
 - **Async**: `asyncio_mode = "auto"`, so `async def test_*` and async fixtures need no per-test decorator.
 - **Discord boundary**: Discord interactions are mocked with `AsyncMock` (no live gateway). Cog command bodies are invoked directly via `Cog.command.callback(cog, interaction, ...)`.
 - **HTTP boundary**: outbound PlatPursuit API calls are answered by `tests/fake_api.py`: the `api_bot` fixture's `api_session` is a `FakeApiSession`, and `with mock_api(cog.bot) as mocked: mocked.post(url, payload=...)` registers a response (see `tests/test_refresh.py`). An unregistered request raises `aiohttp.ClientConnectionError`, as a real network failure would. This replaced `aioresponses` in 2026-10, which broke on aiohttp 3.14.
-- **Webhook API**: `tests/test_api.py` drives the FastAPI app in `bot.py` with `TestClient` (needs `httpx`, dev-only) and pins its own `API_KEY`, because importing `bot.py` loads the developer's `.env`.
+- **Webhook API**: `tests/test_api.py` drives the FastAPI app in `bot.py` through conftest's `webhook_client` fixture (`TestClient`, needs `httpx`, dev-only), which pins `TEST_API_KEY` because importing `bot.py` loads the developer's `.env`, and swaps in fresh role queues (`role_queues`) so nothing queued leaks between tests.
 - **Database**: DB tests run against a per-test temp SQLite file through the real `init_db`, so the SQLAlchemy models/queries are exercised for real.
 - **Coverage today**: db engine + models, notes cog (DB integration), ticket pure-logic helpers, X-announce filters, formatting, the verification role swap (helper + the /link and /unlink cogs that drive it), the Unverified backfill command, both welcome messages, the API-consuming cogs, and the webhook API's auth gate. **Extending**: API cogs follow the `test_refresh.py` `mock_api` pattern; deeper Discord-interaction flows build on the `conftest.py` mocks. The bar is "no new logic without a committed test."
 
@@ -214,6 +214,9 @@ pytest                                  # run the suite
 - **Audit on Python 3.12, not the local venv's Python.** Production runs 3.12; resolving on another version can pick different transitive versions.
 - **`colorama` is pinned with a Windows-only marker** (`; sys_platform == "win32"`): `click` and `uvicorn` only need it on Windows, so the Linux image skips it and a clean-install comparison lists it as "pinned but not installed". That is expected.
 - **A test HTTP mock that builds aiohttp internals breaks on aiohttp upgrades.** That is why `tests/fake_api.py` mocks the session's public surface instead.
+- **CI's pip-audit version comes from `requirements-dev.txt`.** Bump it there (Dependabot does), not in `check.yml`.
+- **GitHub turns off the weekly scheduled run after 60 days with no commits.** If the repo goes quiet, re-enable it under Actions > Check, or the weekly advisory check silently stops (Dependabot alerts still arrive).
+- **Deprecations to plan for:** aiohttp 3.14 deprecates `BasicAuth` (the proxy auth in `bot.py`; aiohttp 4 removes it), and Starlette 1.3 warns that `TestClient` on `httpx` should move to `httpx2`. Both only warn today.
 
 ---
 

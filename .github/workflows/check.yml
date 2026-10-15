@@ -48,7 +48,8 @@ jobs:
       # installs. Every transitive dependency is pinned there, so --no-deps audits exactly what
       # ships. To accept an advisory that has no usable fix, add `--ignore-vuln <ID>` here AND
       # record why in CLAUDE.md (Dependencies and CI); an ignore without a reason is a bug.
-      - run: pip install pip-audit==2.10.1
+      # The version comes from requirements-dev.txt, so Dependabot's bump there covers CI too.
+      - run: pip install "$(grep -oE '^pip-audit==[^ ]+' requirements-dev.txt)"
       - run: pip-audit -r requirements.txt --no-deps --disable-pip --progress-spinner off
       # The audit only sees pinned packages, so every package the image installs must be pinned.
       # A bump (a Dependabot one included) can need a new or changed transitive pin: installing

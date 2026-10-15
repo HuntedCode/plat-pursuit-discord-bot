@@ -191,7 +191,10 @@ class RoleRequest(BaseModel):
     role_id: int
     guild_id: int | None = None
 
-def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)):
+def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)) -> None:
+    if not API_KEY:
+        # Refuse on purpose: comparing against a missing key would only fail by raising.
+        raise HTTPException(status_code=503, detail='API key not configured')
     if not hmac.compare_digest(credentials.credentials, API_KEY):
         raise HTTPException(status_code=401, detail='Invalid API key')
 

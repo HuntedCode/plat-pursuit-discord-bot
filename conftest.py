@@ -7,6 +7,7 @@ makes that guarantee obvious. Outbound HTTP (the PlatPursuit API) is mocked at t
 session boundary with tests/fake_api.py; Discord interactions are mocked with AsyncMock.
 """
 
+import asyncio
 import sys
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
@@ -74,6 +75,32 @@ async def notes_bot(db_sessionmaker):
     bot = MagicMock(name='Bot')
     bot.db_sessionmaker = db_sessionmaker
     return bot
+
+
+#: The API key the webhook tests pin, because importing bot.py loads the developer's .env.
+TEST_API_KEY = 'test-api-key-not-for-production'
+
+
+@pytest.fixture
+def role_queues(monkeypatch):
+    """Fresh role queues, so nothing a test queues (or leaves unfinished) reaches another test."""
+    import bot
+
+    fresh = {'/assign-role': asyncio.Queue(), '/remove-role': asyncio.Queue()}
+    monkeypatch.setattr(bot, 'role_queue', fresh['/assign-role'])
+    monkeypatch.setattr(bot, 'role_removal_queue', fresh['/remove-role'])
+    return fresh
+
+
+@pytest.fixture
+def webhook_client(monkeypatch, role_queues):
+    """A TestClient for the FastAPI app in bot.py, with TEST_API_KEY as the key."""
+    import bot
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(bot, 'API_KEY', TEST_API_KEY)
+    # raise_server_exceptions=False: a server error must come back as a 500, as it would live.
+    return TestClient(bot.app, raise_server_exceptions=False)
 
 
 @pytest_asyncio.fixture

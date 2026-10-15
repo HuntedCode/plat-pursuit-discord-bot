@@ -12,9 +12,11 @@ import signal
 import hmac
 import uuid
 from urllib.parse import urlparse
-from aiohttp import BasicAuth, ClientSession
+from aiohttp import BasicAuth, ClientSession, ClientTimeout
 from pydantic import BaseModel
 from db.engine import init_db
+from utils.command_errors import handle_app_command_error
+from utils.role_guard import refusal_reason
 
 logging.basicConfig(level=logging.INFO)  # Set to DEBUG for verbose dev
 logger = logging.getLogger(__name__)
@@ -53,6 +55,9 @@ async def role_assignment_worker():
                 role = guild.get_role(role_id)
                 if not role:
                     logger.error(f"Role not found: {role_id} in guild {guild_id}")
+                    break
+                if reason := refusal_reason(role):
+                    logger.warning(f"Refused to assign role {role.name} ({role_id}): {reason}")
                     break
 
                 await member.add_roles(role)
@@ -103,6 +108,9 @@ async def role_removal_worker():
                 role = guild.get_role(role_id)
                 if not role:
                     logger.error(f"Role not found: {role_id} in guild {guild_id}")
+                    break
+                if reason := refusal_reason(role):
+                    logger.warning(f"Refused to remove role {role.name} ({role_id}): {reason}")
                     break
 
                 if role not in member.roles:
@@ -161,6 +169,7 @@ intents.message_content = True
 intents.members = True
 
 bot = commands.Bot(command_prefix='!', intents=intents, proxy=PROXY, proxy_auth=PROXY_AUTH)
+bot.tree.on_error = handle_app_command_error
 
 bot.api_base_url = API_BASE_URL
 bot.api_key = API_KEY
@@ -183,7 +192,9 @@ bot.bronze_emoji = f"<:Bronze_Trophy:{BRONZE_EMOJI_ID}>" if BRONZE_EMOJI_ID else
 
 GUILD_ID = int(os.getenv('DISCORD_GUILD_ID', 0))
 
-app = FastAPI()
+# The interactive docs and the OpenAPI schema stay off: the API is called only by PlatPursuit,
+# and a public map of its routes helps nobody else.
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 security = HTTPBearer()
 
 class RoleRequest(BaseModel):
@@ -198,18 +209,29 @@ def verify_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)
     if not hmac.compare_digest(credentials.credentials, API_KEY):
         raise HTTPException(status_code=401, detail='Invalid API key')
 
+def require_home_guild(data: RoleRequest):
+    """Role requests may only target this bot's own server (PlatPursuit never sends another).
+
+    The workers also refuse any role that carries power (utils/role_guard.py), so a leaked API
+    key cannot reach other servers or hand out moderator roles.
+    """
+    if data.guild_id is not None and data.guild_id != GUILD_ID:
+        raise HTTPException(status_code=403, detail='Only the home server is allowed')
+
 @app.get("/health")
 async def health_check():
     return {'status': 'healthy'}
 
 @app.post("/assign-role")
 async def assign_role(data: RoleRequest, _=Depends(verify_api_key)):
+    require_home_guild(data)
     await role_queue.put(data.model_dump(exclude_none=True))
     logger.info(f"Queued role assignment: user={data.user_id} role={data.role_id}")
     return {'status': 'queued', 'message': 'Role assignment queued for processing'}
 
 @app.post("/remove-role")
 async def remove_role(data: RoleRequest, _=Depends(verify_api_key)):
+    require_home_guild(data)
     await role_removal_queue.put(data.model_dump(exclude_none=True))
     logger.info(f"Queued role removal: user={data.user_id} role={data.role_id}")
     return {'status': 'queued', 'message': 'Role removal queued for processing'}
@@ -356,13 +378,20 @@ async def check_proxy_ip():
         logger.error(f"Failed to check outbound IP via proxy: {str(e)}")
         raise
 
+#: Upper bound on one PlatPursuit API call, matching the RSS and admin-script calls. Without it
+#: aiohttp waits up to five minutes, leaving a slash command hanging well past Discord's patience.
+API_TIMEOUT_SECONDS = 30
+
+def make_api_session(headers):
+    return ClientSession(headers=headers, timeout=ClientTimeout(total=API_TIMEOUT_SECONDS))
+
 async def main():
     global bot_task, worker_task, removal_worker_task, server_task, server
     await load_extensions()
 
     await check_proxy_ip()
 
-    bot.api_session = ClientSession(headers=bot.api_headers)
+    bot.api_session = make_api_session(bot.api_headers)
 
     if DATABASE_URL:
         try:

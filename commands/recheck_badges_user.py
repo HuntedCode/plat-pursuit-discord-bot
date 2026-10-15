@@ -11,6 +11,7 @@ class RecheckBadgesUserCog(commands.Cog):
 
     @app_commands.command(name='recheck_badges_user', description='ADMIN ONLY: Run a full badge recheck for a user.')
     @app_commands.default_permissions(manage_messages=True)
+    @app_commands.checks.has_permissions(manage_messages=True)
     @app_commands.describe(user='The user whose badges to recheck.')
     async def recheck_badges_user(self, interaction: discord.Interaction, user: discord.Member):
         await interaction.response.defer(ephemeral=True)

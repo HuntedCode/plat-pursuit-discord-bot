@@ -51,7 +51,7 @@ Composite index on `(guild_id, target_user_id)` for fast per-user lookup.
 |---|---|---|
 | `DATABASE_URL` | SQLAlchemy connection URL. `postgres://`/`postgresql://` (converted to asyncpg) or `sqlite+aiosqlite://`. | (none → notes disabled) |
 
-No bot-specific Discord permissions are needed beyond the ability to respond to commands; access is gated by the `manage_messages` default permission on the `/note` group.
+No bot-specific Discord permissions are needed beyond the ability to respond to commands; access is gated by the `manage_messages` default permission on the `/note` group, and each subcommand also checks `manage_messages` when it runs (a server admin can widen the default in Server Settings > Integrations, so the default alone is not enough).
 
 ## Gotchas and Pitfalls
 

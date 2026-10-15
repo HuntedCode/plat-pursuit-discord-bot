@@ -5,6 +5,8 @@ import os
 import io
 import logging
 
+from utils.command_errors import ReplyOnErrorView
+
 logger = logging.getLogger('psn_api')
 
 OPEN_CUSTOM_ID = 'ticket:open'
@@ -33,7 +35,7 @@ TICKET_MEMBER_OVERWRITE = discord.PermissionOverwrite(
 CLOSE_CONFIRM_TIMEOUT = 60
 
 
-class TicketPanelView(discord.ui.View):
+class TicketPanelView(ReplyOnErrorView):
     """Persistent panel posted in the support channel. Re-registered on startup."""
 
     def __init__(self):
@@ -53,7 +55,7 @@ class TicketPanelView(discord.ui.View):
         await cog.handle_open(interaction)
 
 
-class TicketControlView(discord.ui.View):
+class TicketControlView(ReplyOnErrorView):
     """Persistent controls posted inside each ticket channel."""
 
     def __init__(self):
@@ -73,7 +75,7 @@ class TicketControlView(discord.ui.View):
         await cog.handle_close(interaction)
 
 
-class ConfirmCloseView(discord.ui.View):
+class ConfirmCloseView(ReplyOnErrorView):
     """Ephemeral confirm/cancel prompt shown before a (destructive) close. Not persistent."""
 
     def __init__(self, cog, channel: discord.TextChannel):

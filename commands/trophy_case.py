@@ -4,7 +4,7 @@ from discord.ext import commands
 import logging
 
 from utils.api_errors import api_error_message
-from utils.command_errors import ReplyOnErrorView
+from utils.command_errors import ReplyOnErrorView, edit_reply
 
 logger = logging.getLogger('psn_api')
 
@@ -43,17 +43,18 @@ class TrophyCaseCog(commands.Cog):
             try:
                 page_data, error = await self.fetch_page(str(interaction.user.id), current_page)
                 if not page_data:
-                    await interaction.response.edit_message(content=error, view=None)
+                    # Keep the pager: a brief API error should not cost the user their trophy case.
+                    await interaction.response.edit_message(content=error)
                     return
                 embeds = await self.build_embeds(page_data)
                 await interaction.response.edit_message(content='Page published to channel!', view=None)
                 await interaction.channel.send(embeds=embeds)
                 logger.info(f"User {interaction.user.id} published trophy case page {current_page}")
             except discord.Forbidden:
-                await interaction.response.edit_message(content='Publish failed (bot lacks permissions.)', view=None)
+                await edit_reply(interaction, content='Publish failed (bot lacks permissions.)', view=None)
             except Exception as e:
-                logger.error(f"Publish error: {e}")
-                await interaction.response.edit_message(content='Publish failed. Please try again later.', view=None)
+                logger.error(f"Publish error: {e!r}")
+                await edit_reply(interaction, content='Publish failed. Please try again later.', view=None)
 
         prev_button = discord.ui.Button(label='Previous', style=discord.ButtonStyle.secondary, disabled=current_page == 1)
         prev_button.callback = prev_callback

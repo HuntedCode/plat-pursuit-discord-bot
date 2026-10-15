@@ -5,8 +5,9 @@ PlatPursuit answers bot requests with messages written for people ("No linked pr
 DRF's `detail`, or serializer errors (`non_field_errors`, or a list per field). Cogs used to
 read one shape, or none, and fall back to "API error. Please try again later." for everything
 else. `api_error_message` reads them all, and decides when the server's words must not be shown:
-a 500's text is never useful, an authentication failure is the bot's problem rather than the
-user's, and a rate limit comes back as an HTML page.
+a 500's text is never useful, and an authentication failure is the bot's problem rather than the
+user's. A 429 is PlatPursuit's DRF throttle, which counts every request the bot makes (all Discord
+members share the bot's one API account), so its message blames the load, not the user.
 """
 import json
 import logging
@@ -15,7 +16,7 @@ import aiohttp
 
 logger = logging.getLogger('psn_api')
 
-RATE_LIMITED_MESSAGE = "You're doing that too often. Please wait a minute and try again."
+RATE_LIMITED_MESSAGE = 'PlatPursuit is busy right now. Please wait a minute and try again.'
 UNAVAILABLE_MESSAGE = 'PlatPursuit is having trouble right now. Please try again in a few minutes.'
 BOT_ACCESS_MESSAGE = "The bot can't talk to PlatPursuit right now. Please let a moderator know."
 REQUEST_FAILED_MESSAGE = "PlatPursuit couldn't do that. Please try again, or ask a moderator if it keeps happening."
@@ -25,7 +26,7 @@ MAX_MESSAGE_LENGTH = 300
 LOGGED_BODY_LENGTH = 500
 
 
-def message_from_body(data, *, allow_detail: bool = True) -> str | None:
+def message_from_body(data: object, *, allow_detail: bool = True) -> str | None:
     """The human-readable message in a PlatPursuit error body, whichever shape it takes."""
     if isinstance(data, list):
         return _first_text(data)
@@ -44,14 +45,14 @@ def message_from_body(data, *, allow_detail: bool = True) -> str | None:
     return None
 
 
-def _text(value) -> str | None:
+def _text(value: object) -> str | None:
     if isinstance(value, str) and value.strip():
         text = value.strip()
         return text if len(text) <= MAX_MESSAGE_LENGTH else text[:MAX_MESSAGE_LENGTH - 3].rstrip() + '...'
     return None
 
 
-def _first_text(value) -> str | None:
+def _first_text(value: object) -> str | None:
     if isinstance(value, list) and value:
         return _text(value[0])
     return None

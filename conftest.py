@@ -98,6 +98,41 @@ def fake_role(*, default: bool = False, managed: bool = False, channels=(), **pe
     return role
 
 
+# /link's Verify Now button is a closure, so tests run the command and press the button off the
+# View it sent.
+VERIFIED_ID = 111
+UNVERIFIED_ID = 222
+
+
+@pytest.fixture
+def link_bot(api_bot):
+    api_bot.verified_role_id = VERIFIED_ID
+    api_bot.unverified_role_id = UNVERIFIED_ID
+    return api_bot
+
+
+async def open_verify(cog, interaction):
+    """Run /link and return its 'Verify Now' callback."""
+    from tests.fake_api import mock_api
+    from commands.link import LinkCog
+
+    with mock_api(cog.bot) as mocked:
+        mocked.post('https://api.test/generate-code/', payload={'code': 'ABC123'})
+        await LinkCog.link.callback(cog, interaction, 'coolpsn')
+    view = interaction.followup.send.call_args.kwargs['view']
+    return view.children[0].callback
+
+
+def button_interaction(user: FakeUser) -> MagicMock:
+    """A press of a button, by `user`."""
+    interaction = MagicMock(name='ButtonInteraction')
+    interaction.user = user
+    interaction.response.defer = AsyncMock()
+    interaction.followup.send = AsyncMock()
+    interaction.original_response = AsyncMock(return_value=MagicMock(edit=AsyncMock()))
+    return interaction
+
+
 #: The API key the webhook tests pin, because importing bot.py loads the developer's .env.
 TEST_API_KEY = 'test-api-key-not-for-production'
 

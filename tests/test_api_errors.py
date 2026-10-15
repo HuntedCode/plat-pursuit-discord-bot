@@ -19,12 +19,12 @@ from commands.refresh import RefreshCog
 from commands.trophy_case import TrophyCaseCog
 from commands.unlink import UnlinkCog
 from tests.fake_api import mock_api
-from tests.test_link import button_interaction, link_bot, open_verify  # noqa: F401  (link_bot is a fixture)
+from conftest import button_interaction, open_verify
 from utils.api_errors import (
     BOT_ACCESS_MESSAGE, MAX_MESSAGE_LENGTH, RATE_LIMITED_MESSAGE, REQUEST_FAILED_MESSAGE,
     UNAVAILABLE_MESSAGE, api_error_message, message_from_body,
 )
-from utils.command_errors import FAILED_MESSAGE, ReplyOnErrorView, handle_app_command_error
+from utils.command_errors import FAILED_MESSAGE, NETWORK_MESSAGE, ReplyOnErrorView, edit_reply, handle_app_command_error
 
 
 class RawResponse:
@@ -89,10 +89,12 @@ async def test_a_500_never_shows_its_text():
     assert await api_error_message(response(500, {'error': 'Internal error.'}), action='test') == UNAVAILABLE_MESSAGE
 
 
-async def test_a_rate_limit_page_is_explained():
-    """django-ratelimit answers with the site's HTML 429 page, not JSON."""
-    resp = RawResponse(429, '<!doctype html><h1>Too many requests</h1>')
+async def test_a_throttled_request_blames_the_load_not_the_user():
+    """The bot's 429s come from PlatPursuit's DRF throttle, which counts every request the bot
+    makes for every member, so the person who ran the command is not the one who overdid it."""
+    resp = response(429, {'detail': 'Request was throttled. Expected available in 12 seconds.'})
     assert await api_error_message(resp, action='test') == RATE_LIMITED_MESSAGE
+    assert 'too often' not in RATE_LIMITED_MESSAGE
 
 
 @pytest.mark.parametrize('status, body', [
@@ -145,7 +147,7 @@ async def test_link_shows_why_a_code_could_not_be_made(api_bot, user_factory, in
     assert _sent(interaction) == 'This Discord account is already linked to a PSN account.'
 
 
-async def test_verify_explains_a_private_profile_and_keeps_the_button(link_bot, user_factory, interaction_factory):  # noqa: F811
+async def test_verify_explains_a_private_profile_and_keeps_the_button(link_bot, user_factory, interaction_factory):
     """The case moderators see most: a private PSN profile. The user is told why, and can fix the
     setting and press Verify again without running /link afresh."""
     from commands.link import LinkCog
@@ -162,7 +164,7 @@ async def test_verify_explains_a_private_profile_and_keeps_the_button(link_bot, 
     press.original_response.assert_not_awaited()
 
 
-async def test_verify_shows_a_serializer_error_instead_of_api_error(link_bot, user_factory, interaction_factory):  # noqa: F811
+async def test_verify_shows_a_serializer_error_instead_of_api_error(link_bot, user_factory, interaction_factory):
     from commands.link import LinkCog
 
     cog = LinkCog(link_bot)
@@ -218,17 +220,18 @@ def _interaction(done):
 
 
 @pytest.mark.parametrize('cause', [asyncio.TimeoutError(), aiohttp.ClientConnectionError('refused')])
-async def test_a_command_that_cannot_reach_platpursuit_says_so(caplog, cause):
-    """A timeout (API_TIMEOUT_SECONDS) or a dropped connection is not a bug: no traceback, and
-    the user is told PlatPursuit is having trouble rather than "Something went wrong"."""
+async def test_a_network_error_gets_a_connection_reply_not_a_traceback(caplog, cause):
+    """A timeout (API_TIMEOUT_SECONDS) or a dropped connection is not a bug: no traceback, and a
+    reply about the connection rather than "Something went wrong". It does not name PlatPursuit:
+    the same errors come from Discord's own HTTP calls."""
     interaction = _interaction(done=True)
     error = app_commands.CommandInvokeError(MagicMock(qualified_name='summary'), cause)
 
     await handle_app_command_error(interaction, error)
 
-    interaction.followup.send.assert_awaited_once_with(UNAVAILABLE_MESSAGE, ephemeral=True)
+    interaction.followup.send.assert_awaited_once_with(NETWORK_MESSAGE, ephemeral=True)
     assert 'Unhandled error' not in caplog.text
-    assert 'Could not reach PlatPursuit' in caplog.text
+    assert 'Network error' in caplog.text
 
 
 async def test_a_real_bug_still_gets_the_general_reply_and_a_traceback(caplog):
@@ -243,7 +246,7 @@ async def test_a_real_bug_still_gets_the_general_reply_and_a_traceback(caplog):
 
 
 @pytest.mark.parametrize('cause, expected', [
-    (asyncio.TimeoutError(), UNAVAILABLE_MESSAGE),
+    (asyncio.TimeoutError(), NETWORK_MESSAGE),
     (RuntimeError('a bug'), FAILED_MESSAGE),
 ])
 async def test_a_button_that_fails_gets_a_private_reply(cause, expected):
@@ -258,11 +261,133 @@ async def test_a_button_that_fails_gets_a_private_reply(cause, expected):
     interaction.followup.send.assert_awaited_once_with(expected, ephemeral=True)
 
 
-def test_the_link_and_unlink_buttons_use_the_replying_view():
+@pytest.mark.parametrize('status, keeps_button', [
+    (403, True), (408, True), (429, True), (502, True), (400, False), (404, False), (409, False),
+])
+async def test_verify_keeps_its_button_only_when_pressing_again_can_help(link_bot, user_factory, interaction_factory, status, keeps_button):
+    from commands.link import LinkCog
+
+    cog = LinkCog(link_bot)
+    press = button_interaction(user_factory(7))
+    verify = await open_verify(cog, interaction_factory(user=user_factory(7)))
+    with mock_api(cog.bot) as mocked:
+        mocked.post('https://api.test/verify/', status=status, payload={'success': False, 'message': 'Reason.'})
+        await verify(press)
+
+    assert (press.original_response.await_count == 0) is keeps_button
+
+
+# ── every button replies, and publish errors never answer twice ────────────────────────────────
+
+async def test_the_views_the_commands_send_reply_on_errors(api_bot, link_bot, user_factory, interaction_factory):
+    from commands.link import LinkCog
+
+    interaction = interaction_factory(user=user_factory(7))
+    await open_verify(LinkCog(link_bot), interaction)
+    assert isinstance(interaction.followup.send.call_args.kwargs['view'], ReplyOnErrorView), '/link'
+
+    cog = UnlinkCog(api_bot)
+    interaction = interaction_factory(user=user_factory(7))
+    with mock_api(cog.bot) as mocked:
+        mocked.get('https://api.test/check-linked/?discord_id=7', payload={'linked': True, 'psn_username': 'coolpsn'})
+        await UnlinkCog.unlink.callback(cog, interaction)
+    assert isinstance(interaction.followup.send.call_args.kwargs['view'], ReplyOnErrorView), '/unlink'
+
+    cog = TrophyCaseCog(api_bot)
+    interaction = interaction_factory(user=user_factory(7))
+    with mock_api(cog.bot) as mocked:
+        mocked.get('https://api.test/trophy-case/?discord_id=7&page=1&per_page=4', payload=TROPHY_PAGE)
+        await TrophyCaseCog.trophy_case.callback(cog, interaction)
+    assert isinstance(interaction.followup.send.call_args.kwargs['view'], ReplyOnErrorView), '/trophy_case'
+
+    stats_view = CommunityStatsCog(api_bot)._build_publish_view(7, discord.Embed(title='x'))
+    assert isinstance(stats_view, ReplyOnErrorView), '/trophystats'
+
+
+def test_the_ticket_and_backfill_views_reply_on_errors():
     import inspect
 
-    from commands import link, trophy_case, unlink
+    from commands import backfill_unverified, summary, tickets
 
-    for module in (link, unlink, trophy_case):
-        source = inspect.getsource(module)
-        assert 'ReplyOnErrorView(' in source and 'discord.ui.View(' not in source, module.__name__
+    for cls in (tickets.TicketPanelView, tickets.TicketControlView, tickets.ConfirmCloseView):
+        assert issubclass(cls, ReplyOnErrorView), cls.__name__
+    for module in (backfill_unverified, summary):  # their views are built inside a command body
+        assert 'ReplyOnErrorView(' in inspect.getsource(module), module.__name__
+
+
+@pytest.mark.parametrize('answered', [False, True])
+async def test_edit_reply_never_answers_twice(answered):
+    """A publish that edited the message and then failed to post used to call
+    response.edit_message again, which Discord rejects (InteractionResponded)."""
+    interaction = MagicMock()
+    interaction.response.is_done = MagicMock(return_value=answered)
+    interaction.response.edit_message = AsyncMock()
+    interaction.edit_original_response = AsyncMock()
+
+    await edit_reply(interaction, content='Publish failed.', view=None)
+
+    if answered:
+        interaction.edit_original_response.assert_awaited_once_with(content='Publish failed.', view=None)
+        interaction.response.edit_message.assert_not_awaited()
+    else:
+        interaction.response.edit_message.assert_awaited_once_with(content='Publish failed.', view=None)
+
+
+# ── the cogs not covered above ─────────────────────────────────────────────────────────────────
+
+TROPHY_PAGE = {'linked': True, 'platinums': [], 'current_page': 1, 'total_pages': 2, 'total_plats': 0}
+
+
+async def test_sync_roles_shows_platpursuits_reason(api_bot, user_factory, interaction_factory):
+    from commands.sync_roles import SyncRolesCog
+
+    cog = SyncRolesCog(api_bot)
+    interaction = interaction_factory(user=user_factory(7))
+    with mock_api(cog.bot) as mocked:
+        mocked.post('https://api.test/sync-roles/', status=400, payload={'error': 'Profile is not Discord verified.'})
+        await SyncRolesCog.sync_roles.callback(cog, interaction)
+    assert _sent(interaction) == 'Profile is not Discord verified.'
+
+
+async def test_a_failed_badge_recheck_tells_the_mod_where_to_look(api_bot, user_factory, interaction_factory):
+    from commands.recheck_badges_user import RecheckBadgesUserCog
+
+    cog = RecheckBadgesUserCog(api_bot)
+    interaction = interaction_factory(user=user_factory(7))
+    target = MagicMock(id=42, display_name='Hunter')
+    with mock_api(cog.bot) as mocked:
+        mocked.post('https://api.test/recheck-badges/', status=500, payload={'error': 'Badge recheck failed.'})
+        await RecheckBadgesUserCog.recheck_badges_user.callback(cog, interaction, target)
+    assert _sent(interaction) == "Badge recheck failed for Hunter. Check PlatPursuit's logs for the cause."
+
+
+async def test_a_failed_unlink_says_why(api_bot, user_factory, interaction_factory):
+    cog = UnlinkCog(api_bot)
+    interaction = interaction_factory(user=user_factory(7))
+    with mock_api(cog.bot) as mocked:
+        mocked.get('https://api.test/check-linked/?discord_id=7', payload={'linked': True, 'psn_username': 'coolpsn'})
+        await UnlinkCog.unlink.callback(cog, interaction)
+    yes = interaction.followup.send.call_args.kwargs['view'].children[0].callback
+    press = MagicMock()
+    press.response.defer = AsyncMock()
+    press.edit_original_response = AsyncMock()
+    with mock_api(cog.bot) as mocked:
+        mocked.post('https://api.test/unlink/', status=400, payload={'error': 'discord_id required.'})
+        await yes(press)
+    assert press.edit_original_response.call_args.kwargs['content'] == 'Unlink failed: discord_id required.'
+
+
+async def test_a_trophy_case_page_error_is_explained(api_bot, user_factory, interaction_factory):
+    cog = TrophyCaseCog(api_bot)
+    interaction = interaction_factory(user=user_factory(7))
+    with mock_api(cog.bot) as mocked:
+        mocked.get('https://api.test/trophy-case/?discord_id=7&page=1&per_page=4', payload=TROPHY_PAGE)
+        await TrophyCaseCog.trophy_case.callback(cog, interaction)
+    next_page = interaction.followup.send.call_args.kwargs['view'].children[1].callback
+    press = MagicMock()
+    press.user = user_factory(7)
+    press.response.edit_message = AsyncMock()
+    with mock_api(cog.bot) as mocked:
+        mocked.get('https://api.test/trophy-case/?discord_id=7&page=2&per_page=4', status=500, payload={'error': 'Internal error.'})
+        await next_page(press)
+    assert press.response.edit_message.call_args.kwargs['content'] == UNAVAILABLE_MESSAGE

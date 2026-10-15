@@ -10,6 +10,11 @@ from utils.roles import RoleSwapError, apply_verification_roles
 
 logger = logging.getLogger('psn_api')
 
+#: Verify failures worth pressing the button again for: a private profile (403, fixable in PSN's
+#: settings), a sync timeout (408), PlatPursuit's throttle (429) and server or PSN trouble (5xx).
+#: Anything else (400 already linked, 404, 409) cannot succeed on a retry, so the button goes.
+RETRYABLE_VERIFY_STATUSES = frozenset({403, 408, 429, 500, 502, 503, 504})
+
 class LinkCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -61,10 +66,12 @@ class LinkCog(commands.Cog):
                     verify_payload = {'discord_id': discord_id, 'psn_username': psn_username.lower()}
                     async with session.post(f"{self.bot.api_base_url}verify/", json=verify_payload) as verify_resp:
                         if verify_resp.status != 200:
-                            # The button stays, so a private profile, a PSN hiccup or a sync timeout
-                            # can be fixed and verified again without a fresh /link.
                             message = await api_error_message(verify_resp, action='verify')
                             await button_interaction.followup.send(message, ephemeral=True)
+                            if verify_resp.status not in RETRYABLE_VERIFY_STATUSES:
+                                # Already linked, or nothing to verify: pressing again cannot help.
+                                original_message = await button_interaction.original_response()
+                                await original_message.edit(view=None)
                             return
 
                         data = await verify_resp.json()

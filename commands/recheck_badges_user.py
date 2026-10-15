@@ -30,7 +30,7 @@ class RecheckBadgesUserCog(commands.Cog):
                 awarded = data.get('awarded', [])
                 revoked = data.get('revoked', [])
 
-                lines = [f"Badge recheck complete for **{psn_username}** — {badges_checked} badge(s) checked."]
+                lines = [f"Badge recheck complete for **{psn_username}**: {badges_checked} badge(s) checked."]
 
                 if awarded:
                     lines.append(f"**Awarded:** {', '.join(awarded)}")
@@ -43,6 +43,13 @@ class RecheckBadgesUserCog(commands.Cog):
             elif resp.status == 404:
                 await interaction.followup.send(
                     f'No linked profile found for {user.display_name}.',
+                    ephemeral=True
+                )
+            elif resp.status == 500:
+                # PlatPursuit's evaluation raised for this one profile (it logs the traceback); for a
+                # mod that is more useful than the general "having trouble" message.
+                await interaction.followup.send(
+                    f"Badge recheck failed for {user.display_name}. Check PlatPursuit's logs for the cause.",
                     ephemeral=True
                 )
             else:

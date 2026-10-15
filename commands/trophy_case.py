@@ -3,6 +3,9 @@ from discord import app_commands
 from discord.ext import commands
 import logging
 
+from utils.api_errors import api_error_message
+from utils.command_errors import ReplyOnErrorView
+
 logger = logging.getLogger('psn_api')
 
 class TrophyCaseCog(commands.Cog):
@@ -10,35 +13,38 @@ class TrophyCaseCog(commands.Cog):
         self.bot = bot
 
     def _build_view(self, current_page:int, total_pages: int):
-        view = discord.ui.View(timeout=300)
+        view = ReplyOnErrorView(timeout=300)
 
         async def prev_callback(interaction: discord.Interaction):
             nonlocal current_page
             if current_page > 1:
                 current_page -= 1
-                new_data = await self.fetch_page(str(interaction.user.id), current_page)
+                new_data, error = await self.fetch_page(str(interaction.user.id), current_page)
                 if new_data:
                     new_embeds = await self.build_embeds(new_data)
                     new_view = self._build_view(current_page, new_data['total_pages'])
                     await interaction.response.edit_message(embeds=new_embeds, view=new_view)
                 else:
-                    await interaction.response.edit_message(content='Error fetching page.', embeds=None, view=None)
+                    await interaction.response.edit_message(content=error, embeds=[], view=None)
 
         async def next_callback(interaction: discord.Interaction):
             nonlocal current_page
             if current_page < total_pages:
                 current_page += 1
-                new_data = await self.fetch_page(str(interaction.user.id), current_page)
+                new_data, error = await self.fetch_page(str(interaction.user.id), current_page)
                 if new_data:
                     new_embeds = await self.build_embeds(new_data)
                     new_view = self._build_view(current_page, new_data['total_pages'])
                     await interaction.response.edit_message(embeds=new_embeds, view=new_view)
                 else:
-                    await interaction.response.edit_message(content='Error fetching page.', embeds=None, view=None)
+                    await interaction.response.edit_message(content=error, embeds=[], view=None)
 
         async def publish_callback(interaction: discord.Interaction):
             try:
-                page_data = await self.fetch_page(str(interaction.user.id), current_page)
+                page_data, error = await self.fetch_page(str(interaction.user.id), current_page)
+                if not page_data:
+                    await interaction.response.edit_message(content=error, view=None)
+                    return
                 embeds = await self.build_embeds(page_data)
                 await interaction.response.edit_message(content='Page published to channel!', view=None)
                 await interaction.channel.send(embeds=embeds)
@@ -62,15 +68,14 @@ class TrophyCaseCog(commands.Cog):
 
         return view
 
-    async def fetch_page(self, discord_id, current_page, per_page=4):
+    async def fetch_page(self, discord_id, current_page, per_page=4) -> tuple[dict | None, str | None]:
+        """One page of the trophy case, or None and the message to show instead."""
         session = self.bot.api_session
         params = {'discord_id': discord_id, 'page': current_page, 'per_page': per_page}
         async with session.get(f"{self.bot.api_base_url}trophy-case/", params=params) as resp:
             if resp.status == 200:
-                data = await resp.json()
-                return data
-            else:
-                return None
+                return await resp.json(), None
+            return None, await api_error_message(resp, action='trophy-case')
 
     async def build_embeds(self, page_data):
         platinums = page_data['platinums']
@@ -97,8 +102,11 @@ class TrophyCaseCog(commands.Cog):
         discord_id = str(interaction.user.id)
         page = 1
 
-        data = await self.fetch_page(discord_id, page)
-        if not data or not data.get('linked'):
+        data, error = await self.fetch_page(discord_id, page)
+        if data is None:
+            await interaction.followup.send(error, ephemeral=True)
+            return
+        if not data.get('linked'):
             await interaction.followup.send(data.get('message', 'No linked profile. Use /link first!'), ephemeral=True)
             return
 

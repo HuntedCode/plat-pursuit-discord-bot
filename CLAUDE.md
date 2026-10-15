@@ -106,7 +106,8 @@ PlatBot/
 │   ├── models.py           # Declarative Base + ModNote model (platbot_mod_notes table)
 │   └── engine.py           # Engine/session factory + DATABASE_URL normalization (init_db)
 ├── utils/                  # Shared utilities
-│   ├── command_errors.py   # Slash-command tree error handler (private "no permission" reply)
+│   ├── api_errors.py       # What a user is told when a PlatPursuit API call fails (api_error_message)
+│   ├── command_errors.py   # Error replies for slash commands (tree handler) and buttons (ReplyOnErrorView)
 │   ├── formatting.py       # Number/string formatters shared across cogs
 │   ├── role_guard.py       # Which roles the webhook API may never touch
 │   └── roles.py            # Verified/Unverified role swap shared by /link and /unlink
@@ -146,6 +147,8 @@ PlatBot/
 - Confirmation flows use `discord.ui.View` with button components
 - Paginated displays (trophy case) use button-based navigation views
 - **Mod commands check permissions twice.** `@app_commands.default_permissions(...)` only hides a command, and a server admin can widen it in Server Settings > Integrations. So every mod command also carries `@app_commands.checks.has_permissions(...)` with the same permission, which runs on each use. A failed check is answered privately by `utils/command_errors.handle_app_command_error` (set as `bot.tree.on_error`), which also answers cooldowns and any other error a command leaves unhandled. It steps aside for a command that has its own handler (a `cog_app_command_error`, as in `community_stats.py`), since discord.py calls the tree handler after it. `tests/test_hardening.py` finds every command with `default_permissions` on its own and fails if one lacks the runtime check
+- **API errors go through `utils/api_errors.api_error_message(resp, action=...)`.** On any non-success response, send what it returns; never write a generic "API error". It shows PlatPursuit's own words for a 4xx (and for its readable 502/503s), whatever shape they come in (`message`, `error`, `detail`, serializer errors), and covers the cases that must not show the server's text: a 500, a 429 (an HTML page), and a 401/403 that is the bot's own key failing. Keep a cog's own wording only where it adds something (a 404 that names the user). Errors you do not catch reach the tree handler, which says PlatPursuit is having trouble on a timeout or dropped connection and "Something went wrong" (with a logged traceback) for anything else, so do not wrap a whole command in `except Exception`
+- **Views with buttons subclass `utils.command_errors.ReplyOnErrorView`**, not `discord.ui.View`. A callback's exception never reaches the tree handler, and discord.py's default `View.on_error` only logs it, leaving the person who pressed the button on "thinking...". A test checks `/link`, `/unlink` and `/trophy_case`
 
 ### Cog Structure
 
@@ -222,7 +225,7 @@ pytest                                  # run the suite
 - **HTTP boundary**: outbound PlatPursuit API calls are answered by `tests/fake_api.py`: the `api_bot` fixture's `api_session` is a `FakeApiSession`, and `with mock_api(cog.bot) as mocked: mocked.post(url, payload=...)` registers a response (see `tests/test_refresh.py`). An unregistered request raises `aiohttp.ClientConnectionError`, as a real network failure would. This replaced `aioresponses` in 2026-10, which broke on aiohttp 3.14.
 - **Webhook API**: `tests/test_api.py` drives the FastAPI app in `bot.py` through conftest's `webhook_client` fixture (`TestClient`, needs `httpx`, dev-only), which pins `TEST_API_KEY` because importing `bot.py` loads the developer's `.env`, and swaps in fresh role queues (`role_queues`) so nothing queued leaks between tests.
 - **Database**: DB tests run against a per-test temp SQLite file through the real `init_db`, so the SQLAlchemy models/queries are exercised for real.
-- **Coverage today**: db engine + models, notes cog (DB integration), ticket pure-logic helpers, X-announce filters, formatting, the verification role swap (helper + the /link and /unlink cogs that drive it), the Unverified backfill command, both welcome messages, the API-consuming cogs, the webhook API's auth gate, the role workers' retry rules (`tests/test_role_workers.py`), and the hardening in `tests/test_hardening.py` (role guard, home-server check, no docs routes, API timeout, mod-command runtime checks and the error handler). **Extending**: API cogs follow the `test_refresh.py` `mock_api` pattern; deeper Discord-interaction flows build on the `conftest.py` mocks. The bar is "no new logic without a committed test."
+- **Coverage today**: db engine + models, notes cog (DB integration), ticket pure-logic helpers, X-announce filters, formatting, the verification role swap (helper + the /link and /unlink cogs that drive it), the Unverified backfill command, both welcome messages, the API-consuming cogs, the webhook API's auth gate, the role workers' retry rules (`tests/test_role_workers.py`), the API error messages and the error replies for unreachable PlatPursuit and failed buttons (`tests/test_api_errors.py`), and the hardening in `tests/test_hardening.py` (role guard, home-server check, no docs routes, API timeout, mod-command runtime checks and the error handler). **Extending**: API cogs follow the `test_refresh.py` `mock_api` pattern; deeper Discord-interaction flows build on the `conftest.py` mocks. The bar is "no new logic without a committed test."
 
 ---
 
@@ -260,7 +263,7 @@ Scopes for this project: `commands`, `api`, `roles`, `embeds`, `config`, `docker
 ## Important Gotchas
 
 - **Rate limiting**: Discord aggressively rate-limits role operations. Always use the worker queue system in `bot.py` rather than making direct role assignment calls.
-- **API dependency**: PlatBot reads all trophy/user data from the PlatPursuit API. If the API is down, those data-dependent commands will fail. Commands should handle API errors gracefully with user-friendly messages. (Bot-owned data like mod notes lives in PlatBot's own database, see below, and is independent of the API.)
+- **API dependency**: PlatBot reads all trophy/user data from the PlatPursuit API. If the API is down, those data-dependent commands will fail. Commands answer API errors through `api_error_message` (see Command Patterns), and a timeout or dropped connection reaches the user as "PlatPursuit is having trouble right now". (Bot-owned data like mod notes lives in PlatBot's own database, see below, and is independent of the API.)
 - **Own database**: PlatBot uses its own dedicated Postgres (separate from PlatPursuit), managed via SQLAlchemy `create_all`. If `DATABASE_URL` is unset, DB-backed cogs degrade gracefully rather than crashing.
 - **Emoji IDs**: Custom Discord emojis are server-specific. Emoji ID environment variables must be updated if the bot moves to a different server or emojis are recreated.
 - **The container runs as a non-root user** (`platbot`, uid 10001) and cannot write to `/app`. The bot writes nothing to disk today; a feature that needs to must write to a mounted volume or a temp path, not the app directory.

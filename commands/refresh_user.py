@@ -3,6 +3,8 @@ from discord import app_commands
 from discord.ext import commands
 import logging
 
+from utils.api_errors import api_error_message
+
 logger = logging.getLogger('psn_api')
 
 class RefreshUserCog(commands.Cog):
@@ -27,7 +29,7 @@ class RefreshUserCog(commands.Cog):
                 else:
                     await interaction.followup.send(f"Error: {data.get('message', 'Refresh failed. Check if linked.')}", ephemeral=True)
             else:
-                await interaction.followup.send('API error. Please try again later.', ephemeral=True)
+                await interaction.followup.send(await api_error_message(resp, action='refresh'), ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(RefreshUserCog(bot))

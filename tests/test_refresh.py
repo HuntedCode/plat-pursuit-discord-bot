@@ -1,4 +1,5 @@
 from tests.fake_api import mock_api
+from utils.api_errors import UNAVAILABLE_MESSAGE
 
 from commands.refresh import RefreshCog
 
@@ -35,4 +36,4 @@ async def test_refresh_api_error_status(api_bot, user_factory, interaction_facto
     with mock_api(cog.bot) as mocked:
         mocked.post('https://api.test/refresh/', status=500)
         await RefreshCog.refresh.callback(cog, interaction)
-    assert 'API error' in _sent_text(interaction)
+    assert _sent_text(interaction) == UNAVAILABLE_MESSAGE, 'a 500 says PlatPursuit is having trouble, not "API error"'

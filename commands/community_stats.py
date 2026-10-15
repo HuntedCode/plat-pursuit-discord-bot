@@ -1,3 +1,6 @@
+import asyncio
+
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -6,6 +9,7 @@ from zoneinfo import ZoneInfo
 import logging
 import time
 
+from utils.api_errors import UNAVAILABLE_MESSAGE, api_error_message
 from utils.formatting import format_number
 
 logger = logging.getLogger('psn_api')
@@ -39,12 +43,10 @@ class CommunityStatsCog(commands.Cog):
                     return await resp.json(), None
                 if resp.status == 404:
                     return None, "No community stats data found for that day yet. Check back soon!"
-                text = await resp.text()
-                logger.error(f"Community-stats API error {resp.status} on {url}: {text}")
-                return None, "Couldn't reach the PlatPursuit API right now. Try again in a moment."
-        except Exception:
-            logger.exception(f"Community-stats API exception on {url}")
-            return None, "Couldn't reach the PlatPursuit API right now. Try again in a moment."
+                return None, await api_error_message(resp, action=path)
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            logger.warning(f"Could not reach PlatPursuit for community stats ({path}): {e!r}")
+            return None, UNAVAILABLE_MESSAGE
 
     def _build_day_embed(self, data: dict, title: str, footer: str) -> discord.Embed:
         embed = discord.Embed(

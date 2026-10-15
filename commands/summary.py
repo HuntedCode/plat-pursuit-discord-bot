@@ -4,6 +4,7 @@ from discord.ext import commands
 import logging
 
 from utils.formatting import format_number
+from utils.api_errors import api_error_message
 
 logger = logging.getLogger('psn_api')
 
@@ -92,9 +93,7 @@ class SummaryCog(commands.Cog):
                 else:
                     await interaction.followup.send('No PSN linked. Use /link first!', ephemeral=True)
             else:
-                error_text = await resp.text()
-                logger.error(f"API error: {resp.status} - {error_text}")
-                await interaction.followup.send('API error. Please try again later.', ephemeral=True)
+                await interaction.followup.send(await api_error_message(resp, action='summary'), ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(SummaryCog(bot))

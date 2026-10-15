@@ -4,6 +4,8 @@ from discord.ext import commands
 import asyncio
 import logging
 
+from utils.api_errors import api_error_message
+from utils.command_errors import ReplyOnErrorView
 from utils.roles import RoleSwapError, apply_verification_roles
 
 logger = logging.getLogger('psn_api')
@@ -52,60 +54,50 @@ class LinkCog(commands.Cog):
                         inline=False
                     )
 
-                view = discord.ui.View(timeout=900)
+                view = ReplyOnErrorView(timeout=900)
 
                 async def verify_callback(button_interaction: discord.Interaction):
                     await button_interaction.response.defer(ephemeral=True)
                     verify_payload = {'discord_id': discord_id, 'psn_username': psn_username.lower()}
                     async with session.post(f"{self.bot.api_base_url}verify/", json=verify_payload) as verify_resp:
-                        if verify_resp.status == 403:
-                            data = await verify_resp.json()
-                            await button_interaction.followup.send(
-                                f"Error: {data.get('message', 'This PSN profile has its privacy settings enabled. Please set your gaming history to public and try again.')}",
-                                ephemeral=True
-                            )
+                        if verify_resp.status != 200:
+                            # The button stays, so a private profile, a PSN hiccup or a sync timeout
+                            # can be fixed and verified again without a fresh /link.
+                            message = await api_error_message(verify_resp, action='verify')
+                            await button_interaction.followup.send(message, ephemeral=True)
                             return
 
-                        if verify_resp.status == 200:
-                            data = await verify_resp.json()
-                            if data.get('success'):
-                                # Achievement-role sync is independent of the verification
-                                # role swap, so start it first: a misconfigured role must
-                                # not stop a verified user's badge roles from syncing.
-                                asyncio.create_task(self._sync_roles_fire_and_forget(discord_id))
-                                try:
-                                    await apply_verification_roles(
-                                        button_interaction.user,
-                                        verified=True,
-                                        verified_role_id=self.bot.verified_role_id,
-                                        unverified_role_id=self.bot.unverified_role_id,
-                                        reason='PSN verified via /link',
-                                    )
-                                    result = 'Success! Your PSN is verified and linked.'
-                                    # Listened for by WelcomeCog (verified welcome post).
-                                    # Dispatched only after the role swap returns cleanly,
-                                    # so a failed assignment never gets a public welcome.
-                                    self.bot.dispatch(
-                                        'psn_verified',
-                                        button_interaction.user,
-                                        data.get('psn_username') or psn_username,
-                                    )
-                                except RoleSwapError as e:
-                                    result = f"Verification succeeded but {e}. Contact admin."
-                                except Exception as e:
-                                    logger.error(f"Unexpected error assigning verification roles for {discord_id}: {e}")
-                                    result = 'Verification succeeded but unexpected error assigning roles. Contact admin.'
-                                await button_interaction.followup.send(result, ephemeral=True)
-                            else:
-                                await button_interaction.followup.send(f"Error: {data.get('message', 'Verification failed. Check About Me and permissions.')}", ephemeral=True)
-                        elif verify_resp.status == 502:
-                            data = await verify_resp.json()
-                            await button_interaction.followup.send(
-                                f"Error: {data.get('message', 'PSN sync failed. Please try again later.')}",
-                                ephemeral=True
-                            )
+                        data = await verify_resp.json()
+                        if data.get('success'):
+                            # Achievement-role sync is independent of the verification
+                            # role swap, so start it first: a misconfigured role must
+                            # not stop a verified user's badge roles from syncing.
+                            asyncio.create_task(self._sync_roles_fire_and_forget(discord_id))
+                            try:
+                                await apply_verification_roles(
+                                    button_interaction.user,
+                                    verified=True,
+                                    verified_role_id=self.bot.verified_role_id,
+                                    unverified_role_id=self.bot.unverified_role_id,
+                                    reason='PSN verified via /link',
+                                )
+                                result = 'Success! Your PSN is verified and linked.'
+                                # Listened for by WelcomeCog (verified welcome post).
+                                # Dispatched only after the role swap returns cleanly,
+                                # so a failed assignment never gets a public welcome.
+                                self.bot.dispatch(
+                                    'psn_verified',
+                                    button_interaction.user,
+                                    data.get('psn_username') or psn_username,
+                                )
+                            except RoleSwapError as e:
+                                result = f"Verification succeeded but {e}. Contact admin."
+                            except Exception as e:
+                                logger.error(f"Unexpected error assigning verification roles for {discord_id}: {e}")
+                                result = 'Verification succeeded but unexpected error assigning roles. Contact admin.'
+                            await button_interaction.followup.send(result, ephemeral=True)
                         else:
-                            await button_interaction.followup.send('API error. Please try again later.', ephemeral=True)
+                            await button_interaction.followup.send(f"Error: {data.get('message', 'Verification failed. Check About Me and permissions.')}", ephemeral=True)
 
                         original_message = await button_interaction.original_response()
                         await original_message.edit(view=None)
@@ -116,12 +108,8 @@ class LinkCog(commands.Cog):
 
                 await interaction.followup.send(embed=embed, view=view, ephemeral=True)
                 logger.info(f"Generated code for user {discord_id} - PSN: {psn_username}")
-            elif resp.status == 400:
-                data = await resp.json()
-                error_msg = data.get('non_field_errors', [data.get('detail', 'Unknown error')])[0]
-                await interaction.followup.send(f"Error: {error_msg}", ephemeral=True)
             else:
-                await interaction.followup.send('Error generating code. Please try again later or contact an admin.', ephemeral=True)
+                await interaction.followup.send(await api_error_message(resp, action='generate-code'), ephemeral=True)
 
 async def setup(bot):
     await bot.add_cog(LinkCog(bot))

@@ -27,6 +27,7 @@ class NotesCog(commands.Cog):
     )
 
     @note_group.command(name='add', description="MODERATOR ONLY: Add a note to a user's record.")
+    @app_commands.checks.has_permissions(manage_messages=True)
     @app_commands.describe(user='The user to add a note to.', note='The note text.')
     async def add(self, interaction: discord.Interaction, user: discord.Member, note: str):
         await interaction.response.defer(ephemeral=True)
@@ -62,6 +63,7 @@ class NotesCog(commands.Cog):
         logger.info(f"Mod note added for {user.id} by {interaction.user.id}")
 
     @note_group.command(name='view', description="MODERATOR ONLY: View a user's notes.")
+    @app_commands.checks.has_permissions(manage_messages=True)
     @app_commands.describe(user='The user whose notes to view.')
     async def view(self, interaction: discord.Interaction, user: discord.Member):
         await interaction.response.defer(ephemeral=True)

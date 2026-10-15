@@ -378,6 +378,7 @@ class TicketsCog(commands.Cog):
 
     @app_commands.command(name='ticket_user', description='MODERATOR ONLY: Open a private ticket and pull a user (or up to 3) into it.')
     @app_commands.default_permissions(manage_messages=True)
+    @app_commands.checks.has_permissions(manage_messages=True)
     @app_commands.describe(
         user='The user to pull into the ticket.',
         reason='Optional reason shown in the ticket.',
@@ -467,6 +468,7 @@ class TicketsCog(commands.Cog):
 
     @app_commands.command(name='ticket_panel', description='MODERATOR ONLY: Post the ticket panel in the support channel.')
     @app_commands.default_permissions(manage_messages=True)
+    @app_commands.checks.has_permissions(manage_messages=True)
     async def ticket_panel(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
 

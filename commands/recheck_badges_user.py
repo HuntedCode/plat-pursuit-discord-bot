@@ -2,8 +2,13 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 import logging
+from aiohttp import ClientTimeout
 
 logger = logging.getLogger('psn_api')
+
+#: A full recheck evaluates every badge against all of a user's games in one request, so it gets
+#: longer than the session's default API timeout before the mod is told it failed.
+RECHECK_TIMEOUT = ClientTimeout(total=120)
 
 class RecheckBadgesUserCog(commands.Cog):
     def __init__(self, bot):
@@ -11,6 +16,7 @@ class RecheckBadgesUserCog(commands.Cog):
 
     @app_commands.command(name='recheck_badges_user', description='ADMIN ONLY: Run a full badge recheck for a user.')
     @app_commands.default_permissions(manage_messages=True)
+    @app_commands.checks.has_permissions(manage_messages=True)
     @app_commands.describe(user='The user whose badges to recheck.')
     async def recheck_badges_user(self, interaction: discord.Interaction, user: discord.Member):
         await interaction.response.defer(ephemeral=True)
@@ -18,7 +24,7 @@ class RecheckBadgesUserCog(commands.Cog):
         session = self.bot.api_session
         payload = {'discord_id': target_discord_id}
         try:
-            async with session.post(f"{self.bot.api_base_url}recheck-badges/", json=payload) as resp:
+            async with session.post(f"{self.bot.api_base_url}recheck-badges/", json=payload, timeout=RECHECK_TIMEOUT) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     psn_username = data.get('psn_username', 'Unknown')
@@ -52,7 +58,7 @@ class RecheckBadgesUserCog(commands.Cog):
                 else:
                     await interaction.followup.send('API error. Please try again later.', ephemeral=True)
         except Exception as e:
-            logger.error(f"recheck_badges_user command error for {target_discord_id}: {e}")
+            logger.error(f"recheck_badges_user command error for {target_discord_id}: {e!r}")
             await interaction.followup.send('An unexpected error occurred. Please try again later.', ephemeral=True)
 
 async def setup(bot):

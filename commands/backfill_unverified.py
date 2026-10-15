@@ -61,6 +61,7 @@ class BackfillUnverifiedCog(commands.Cog):
         description='MODERATOR ONLY: One-time backfill of the Unverified role for members without Verified.',
     )
     @app_commands.default_permissions(manage_roles=True)
+    @app_commands.checks.has_permissions(manage_roles=True)
     async def backfill_unverified(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         guild = interaction.guild

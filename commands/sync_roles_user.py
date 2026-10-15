@@ -11,6 +11,7 @@ class SyncRolesUserCog(commands.Cog):
 
     @app_commands.command(name='sync_roles_user', description='MODERATOR ONLY: Sync all earned Discord roles for a user.')
     @app_commands.default_permissions(manage_messages=True)
+    @app_commands.checks.has_permissions(manage_messages=True)
     @app_commands.describe(user='The user to sync roles for.')
     async def sync_roles_user(self, interaction: discord.Interaction, user: discord.Member):
         await interaction.response.defer(ephemeral=True)
@@ -44,7 +45,7 @@ class SyncRolesUserCog(commands.Cog):
                 else:
                     await interaction.followup.send('API error. Please try again later.', ephemeral=True)
         except Exception as e:
-            logger.error(f"sync_roles_user command error for {target_discord_id}: {e}")
+            logger.error(f"sync_roles_user command error for {target_discord_id}: {e!r}")
             await interaction.followup.send('An unexpected error occurred. Please try again later.', ephemeral=True)
 
 async def setup(bot):

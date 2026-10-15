@@ -40,6 +40,22 @@ PlatBot runs two services in the same process:
 - All API calls go through `API_BASE_URL` with `API_KEY` header authentication
 - Key API endpoints consumed: `generate-code/`, `verify/`, `summary/`, `trophy-case/`, `sync-roles/`, `refresh/`, `unlink/`, `check-linked/`, `recheck-badges/`, `community-stats/today/`, `community-stats/<date>/`, `community-stats/records/`
 - PlatPursuit triggers role operations by calling PlatBot's `/assign-role` and `/remove-role` FastAPI endpoints
+- Outbound API calls share one `aiohttp` session built by `make_api_session`, with a total timeout of `API_TIMEOUT_SECONDS` (30), so a hung PlatPursuit request fails instead of stalling a command forever (the tree error handler then tells the user something went wrong). `/recheck_badges_user` passes its own longer `RECHECK_TIMEOUT` (120), because a full recheck evaluates every badge in one request
+
+### Webhook API Limits
+
+The FastAPI server is public, so it is built to stay safe even if `API_KEY` leaks:
+
+| Limit | Where | Why |
+|-------|-------|-----|
+| No `/docs`, `/redoc` or `/openapi.json` | `FastAPI(docs_url=None, ...)` in `bot.py` | Nothing advertises the routes or their bodies |
+| Home server only | `require_home_guild` in `bot.py` | A role request naming another `guild_id` gets 403. PlatPursuit sends no `guild_id`, which means the home server |
+| Not the bot's own roles | `API_PROTECTED_ROLE_IDS` in `bot.py`, checked by `require_api_togglable_role` | Verified, Unverified and the ticket mod role get 403. The bot handles the first two itself (`/link`, `/unlink`, the backfill), and the ticket mod role grants access by ID, not by permission flags, so the role guard would not catch it. PlatPursuit only sends badge, milestone and premium roles |
+| No powerful roles | `utils/role_guard.refusal_reason`, checked up front by `require_api_togglable_role` and again by both role workers | The bot never adds or removes @everyone, an integration-managed role, or any role granting a permission in `PRIVILEGED_PERMISSIONS` (administrator, manage_*, kick, ban, timeout, voice moderation, mention_everyone, audit log, insights), server-wide or through any channel's overwrites. Unlocking a private channel is allowed (premium channels need it). A role already in the bot's cache is refused with a 403 and the reason, which PlatPursuit logs; the workers check again when they run (the role can change while queued) and log refusals as warnings. They check the role before the member is looked up, so a refused request costs no Discord API calls |
+
+A new role route must call `require_home_guild` and `require_api_togglable_role` first, and any role change the webhook API triggers must go through the workers so the role guard applies. (Role changes a user triggers themselves, like the Verified swap in `utils/roles.py`, call Discord directly.)
+
+`PRIVILEGED_PERMISSIONS` is a list of named flags, so a permission Discord adds later is allowed until it is named here. Two that discord.py 2.6.4 cannot name yet, `pin_messages` (1 << 51) and `bypass_slowmode` (1 << 52), are refused by bit through `UNNAMED_PRIVILEGED_BITS`, but on the role itself only: discord.py drops unnamed bits when it builds a channel overwrite. A test fails once discord.py names them, as the cue to move them into `PRIVILEGED_PERMISSIONS`.
 
 ### Worker Queue System
 
@@ -79,7 +95,9 @@ PlatBot/
 │   ├── models.py           # Declarative Base + ModNote model (platbot_mod_notes table)
 │   └── engine.py           # Engine/session factory + DATABASE_URL normalization (init_db)
 ├── utils/                  # Shared utilities
+│   ├── command_errors.py   # Slash-command tree error handler (private "no permission" reply)
 │   ├── formatting.py       # Number/string formatters shared across cogs
+│   ├── role_guard.py       # Which roles the webhook API may never touch
 │   └── roles.py            # Verified/Unverified role swap shared by /link and /unlink
 ├── scripts/                # Operational CLI helpers (run inside the container via Render shell)
 │   └── x_admin.py          # Wrapper for /admin/x-announce/{test,latest} (curl-free)
@@ -116,6 +134,7 @@ PlatBot/
 - User-facing responses are ephemeral (visible only to the invoking user) unless displaying public data
 - Confirmation flows use `discord.ui.View` with button components
 - Paginated displays (trophy case) use button-based navigation views
+- **Mod commands check permissions twice.** `@app_commands.default_permissions(...)` only hides a command, and a server admin can widen it in Server Settings > Integrations. So every mod command also carries `@app_commands.checks.has_permissions(...)` with the same permission, which runs on each use. A failed check is answered privately by `utils/command_errors.handle_app_command_error` (set as `bot.tree.on_error`), which also answers cooldowns and any other error a command leaves unhandled. It steps aside for a command that has its own handler (a `cog_app_command_error`, as in `community_stats.py`), since discord.py calls the tree handler after it. `tests/test_hardening.py` finds every command with `default_permissions` on its own and fails if one lacks the runtime check
 
 ### Cog Structure
 
@@ -192,7 +211,7 @@ pytest                                  # run the suite
 - **HTTP boundary**: outbound PlatPursuit API calls are answered by `tests/fake_api.py`: the `api_bot` fixture's `api_session` is a `FakeApiSession`, and `with mock_api(cog.bot) as mocked: mocked.post(url, payload=...)` registers a response (see `tests/test_refresh.py`). An unregistered request raises `aiohttp.ClientConnectionError`, as a real network failure would. This replaced `aioresponses` in 2026-10, which broke on aiohttp 3.14.
 - **Webhook API**: `tests/test_api.py` drives the FastAPI app in `bot.py` through conftest's `webhook_client` fixture (`TestClient`, needs `httpx`, dev-only), which pins `TEST_API_KEY` because importing `bot.py` loads the developer's `.env`, and swaps in fresh role queues (`role_queues`) so nothing queued leaks between tests.
 - **Database**: DB tests run against a per-test temp SQLite file through the real `init_db`, so the SQLAlchemy models/queries are exercised for real.
-- **Coverage today**: db engine + models, notes cog (DB integration), ticket pure-logic helpers, X-announce filters, formatting, the verification role swap (helper + the /link and /unlink cogs that drive it), the Unverified backfill command, both welcome messages, the API-consuming cogs, and the webhook API's auth gate. **Extending**: API cogs follow the `test_refresh.py` `mock_api` pattern; deeper Discord-interaction flows build on the `conftest.py` mocks. The bar is "no new logic without a committed test."
+- **Coverage today**: db engine + models, notes cog (DB integration), ticket pure-logic helpers, X-announce filters, formatting, the verification role swap (helper + the /link and /unlink cogs that drive it), the Unverified backfill command, both welcome messages, the API-consuming cogs, the webhook API's auth gate, and the hardening in `tests/test_hardening.py` (role guard, home-server check, no docs routes, API timeout, mod-command runtime checks and the error handler). **Extending**: API cogs follow the `test_refresh.py` `mock_api` pattern; deeper Discord-interaction flows build on the `conftest.py` mocks. The bar is "no new logic without a committed test."
 
 ---
 
@@ -232,4 +251,5 @@ Scopes for this project: `commands`, `api`, `roles`, `embeds`, `config`, `docker
 - **API dependency**: PlatBot reads all trophy/user data from the PlatPursuit API. If the API is down, those data-dependent commands will fail. Commands should handle API errors gracefully with user-friendly messages. (Bot-owned data like mod notes lives in PlatBot's own database, see below, and is independent of the API.)
 - **Own database**: PlatBot uses its own dedicated Postgres (separate from PlatPursuit), managed via SQLAlchemy `create_all`. If `DATABASE_URL` is unset, DB-backed cogs degrade gracefully rather than crashing.
 - **Emoji IDs**: Custom Discord emojis are server-specific. Emoji ID environment variables must be updated if the bot moves to a different server or emojis are recreated.
+- **The container runs as a non-root user** (`platbot`, uid 10001) and cannot write to `/app`. The bot writes nothing to disk today; a feature that needs to must write to a mounted volume or a temp path, not the app directory.
 - **Slash command sync**: After adding/modifying commands, Discord may take up to an hour to propagate slash command changes globally. Use guild-specific sync during development for instant updates.

@@ -24,7 +24,7 @@ from conftest import TEST_API_KEY
 from utils.command_errors import (
     COOLDOWN_MESSAGE, FAILED_MESSAGE, NO_PERMISSION_MESSAGE, handle_app_command_error,
 )
-from utils.role_guard import PRIVILEGED_PERMISSIONS, UNNAMED_PRIVILEGED_BITS, refusal_reason
+from utils.role_guard import PRIVILEGED_PERMISSIONS, refusal_reason
 
 HOME_GUILD = 111
 
@@ -75,22 +75,16 @@ def test_power_granted_in_one_channel_is_refused():
     assert reason == 'it grants manage_messages in #mod-log'
 
 
-@pytest.mark.parametrize('name, bit', UNNAMED_PRIVILEGED_BITS.items())
-def test_permissions_discord_py_cannot_name_yet_are_refused_by_bit(name, bit):
-    # Role level only: discord.py drops bits it cannot name when it builds a channel overwrite.
-    assert name in refusal_reason(_role_with_bits(bit))
+def test_pinning_granted_in_one_channel_is_refused():
+    """pin_messages moved out of manage_messages in 2025, so it needs checking on its own."""
+    pins = fake_channel('announcements', discord.PermissionOverwrite(pin_messages=True))
+    assert refusal_reason(fake_role(channels=[pins])) == 'it grants pin_messages in #announcements'
 
 
-@pytest.mark.parametrize('name', UNNAMED_PRIVILEGED_BITS)
-def test_the_unnamed_bits_are_still_unnamed(name):
-    """Fails once discord.py names one: move it into PRIVILEGED_PERMISSIONS then."""
-    assert name not in discord.Permissions.VALID_FLAGS
-
-
-def _role_with_bits(bits):
-    role = fake_role()
-    role.permissions = discord.Permissions(bits)
-    return role
+@pytest.mark.parametrize('permission', PRIVILEGED_PERMISSIONS)
+def test_every_privileged_permission_is_one_discord_py_knows(permission):
+    """A misspelled or unsupported name would silently never match (getattr would raise here)."""
+    assert permission in discord.Permissions.VALID_FLAGS
 
 
 def test_a_role_may_unlock_a_channel_or_be_denied_power_in_one():

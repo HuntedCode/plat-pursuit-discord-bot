@@ -12,12 +12,12 @@ import signal
 import hmac
 import uuid
 from collections.abc import Callable
-from urllib.parse import urlparse
-from aiohttp import BasicAuth, ClientError, ClientSession, ClientTimeout
+from aiohttp import ClientError, ClientSession, ClientTimeout
 from pydantic import BaseModel
 from db.engine import init_db
 from utils.command_errors import handle_app_command_error
 from utils.role_guard import refusal_reason
+from utils.proxy import mute_proxy_auth_deprecations, parse_proxy_url
 
 logging.basicConfig(level=logging.INFO)  # Set to DEBUG for verbose dev
 logger = logging.getLogger(__name__)
@@ -158,13 +158,10 @@ BRONZE_EMOJI_ID = os.getenv('BRONZE_EMOJI_ID')
 BOT_API_PORT = int(os.getenv('PORT', 5000))
 BOT_API_HOST = os.getenv('BOT_API_HOST', '127.0.0.1') # localhost for dev, 0.0.0.0 for prod
 
+# Outbound proxy for all Discord traffic (see utils/proxy.py for why the credentials go separately).
 PROXY_URL = os.getenv('PROXY_URL')
-PROXY = None
-PROXY_AUTH = None
-if PROXY_URL:
-    parsed_proxy = urlparse(PROXY_URL)
-    PROXY = f"{parsed_proxy.scheme}://{parsed_proxy.hostname}:{parsed_proxy.port}"
-    PROXY_AUTH = BasicAuth(parsed_proxy.username, parsed_proxy.password) if parsed_proxy.username and parsed_proxy.password else None
+PROXY, PROXY_AUTH = parse_proxy_url(PROXY_URL)
+mute_proxy_auth_deprecations()
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--sync_commands', action='store_true', help='Global sync bot commands.')

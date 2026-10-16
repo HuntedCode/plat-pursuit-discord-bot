@@ -205,7 +205,7 @@ async def setup(bot):
 | `TICKET_ALERT_CHANNEL_ID` | Staff-only channel where an alert embed is posted when a ticket opens and edited to "closed" when it closes (no ping) |
 | `DATABASE_URL` | SQLAlchemy connection URL for bot-owned data (mod notes). Accepts `postgres://`/`postgresql://` (converted to asyncpg) or `sqlite+aiosqlite://` (local dev only: `aiosqlite` is in `requirements-dev.txt`, not the production image). Unset = DB features disabled |
 | `PORT`, `BOT_API_HOST` | FastAPI server configuration |
-| `PROXY_URL` | Optional outbound proxy |
+| `PROXY_URL` | Outbound proxy for all Discord traffic, `scheme://user:password@host:port` (set in production: it keeps the bot off Render's shared IP, whose Discord rate limits other services would share). `utils/proxy.py` splits it: the address goes to discord.py as `proxy`, the credentials as `proxy_auth`. Never pass the whole URL: aiohttp's proxy errors print it, password included, and discord.py logs them on every reconnect. aiohttp 3.14 deprecates the split route, so its two warnings are muted (`tests/test_proxy.py` guards the split, the mute and the no-leak) |
 | Emoji IDs | Various custom emoji references for rich embeds |
 
 ---
@@ -223,7 +223,7 @@ pytest                                  # run the suite
 - **Async**: `asyncio_mode = "auto"`, so `async def test_*` and async fixtures need no per-test decorator.
 - **Discord boundary**: Discord interactions are mocked with `AsyncMock` (no live gateway). Cog command bodies are invoked directly via `Cog.command.callback(cog, interaction, ...)`.
 - **HTTP boundary**: outbound PlatPursuit API calls are answered by `tests/fake_api.py`: the `api_bot` fixture's `api_session` is a `FakeApiSession`, and `with mock_api(cog.bot) as mocked: mocked.post(url, payload=...)` registers a response (see `tests/test_refresh.py`). An unregistered request raises `aiohttp.ClientConnectionError`, as a real network failure would. This replaced `aioresponses` in 2026-10, which broke on aiohttp 3.14.
-- **Webhook API**: `tests/test_api.py` drives the FastAPI app in `bot.py` through conftest's `webhook_client` fixture (`TestClient`, needs `httpx`, dev-only), which pins `TEST_API_KEY` because importing `bot.py` loads the developer's `.env`, and swaps in fresh role queues (`role_queues`) so nothing queued leaks between tests.
+- **Webhook API**: `tests/test_api.py` drives the FastAPI app in `bot.py` through conftest's `webhook_client` fixture (`TestClient`, needs `httpx2`, dev-only), which pins `TEST_API_KEY` because importing `bot.py` loads the developer's `.env`, and swaps in fresh role queues (`role_queues`) so nothing queued leaks between tests.
 - **Database**: DB tests run against a per-test temp SQLite file through the real `init_db`, so the SQLAlchemy models/queries are exercised for real.
 - **Coverage today**: db engine + models, notes cog (DB integration), ticket pure-logic helpers, X-announce filters, formatting, the verification role swap (helper + the /link and /unlink cogs that drive it), the Unverified backfill command, both welcome messages, the API-consuming cogs, the webhook API's auth gate, the role workers' retry rules (`tests/test_role_workers.py`), the API error messages and the error replies for unreachable PlatPursuit and failed buttons (`tests/test_api_errors.py`), and the hardening in `tests/test_hardening.py` (role guard, home-server check, no docs routes, API timeout, mod-command runtime checks and the error handler). **Extending**: API cogs follow the `test_refresh.py` `mock_api` pattern; deeper Discord-interaction flows build on the `conftest.py` mocks. The bar is "no new logic without a committed test."
 
@@ -234,7 +234,7 @@ pytest                                  # run the suite
 | What | Where | Notes |
 |------|-------|-------|
 | Production requirements | `requirements.txt` | Fully pinned, transitive dependencies included, so the audit sees exactly what ships. Python 3.12 (the Docker image). |
-| Dev and test tools | `requirements-dev.txt` | `-r requirements.txt` plus pytest, `aiosqlite` (the SQLite driver for local dev and tests; production uses asyncpg), `httpx` (TestClient) and `pip-audit`. |
+| Dev and test tools | `requirements-dev.txt` | `-r requirements.txt` plus pytest, `aiosqlite` (the SQLite driver for local dev and tests; production uses asyncpg), `httpx2` (TestClient) and `pip-audit`. |
 | CI | `.github/workflows/check.yml` | On every PR, push to main and weekly on main: **Tests** (pytest), **Dependency audit** (`pip-audit -r requirements.txt --no-deps`, then a pin check: install the pins with `--no-deps` and run `pip check`), **Secret scan** (gitleaks over the full history). |
 | Dependabot | `.github/dependabot.yml` | Security PRs as soon as an advisory is published (enable "Dependabot security updates" in the repository settings), plus one grouped pip PR and one grouped GitHub Actions PR with every minor and patch update on the 1st of each month (`tzdata`, whose date versions look like a major every year, rides a second group). Each major update opens its own PR. A reminder issue for the monthly review opens on the 2nd. |
 
@@ -250,7 +250,7 @@ pytest                                  # run the suite
 - **Some Dependabot PRs cannot pass alone.** Each major is its own PR, but some only work together (pytest 9 and pytest-asyncio 1.x need each other), and some wait on another package (aiohttp 3.14 caps `multidict` below 7). Combine the first kind on one branch; close the second with `@dependabot ignore this major version` and revisit when the blocker moves. A grouped PR can also need a pin it did not add: feedparser 6.0.14 swapped `sgmllib3k` for `feedparser-sgmllib`, which the pin check caught.
 - **CI's pip-audit version comes from `requirements-dev.txt`.** Bump it there (Dependabot does), not in `check.yml`.
 - **GitHub turns off the weekly scheduled run after 60 days with no commits.** If the repo goes quiet, re-enable it under Actions > Check, or the weekly advisory check silently stops (Dependabot alerts still arrive).
-- **Deprecations to plan for:** aiohttp 3.14 deprecates `BasicAuth` (the proxy auth in `bot.py`; aiohttp 4 removes it), and Starlette 1.3 warns that `TestClient` on `httpx` should move to `httpx2`. Both only warn today.
+- **Deprecations to plan for:** aiohttp 4 removes `BasicAuth` and `proxy_auth`, which the proxy needs (see `PROXY_URL` above; today their warnings are muted in `utils/proxy.py`). Its replacement, proxy headers, is not something discord.py exposes, so an aiohttp 4 upgrade needs a plan for the proxy first. The warnings left in the test run are other packages' own: on Python 3.13, discord.py 2.7.1's `escape_markdown` (`re.sub`'s `count` passed positionally); on 3.12 (production and CI), the stdlib `audioop` discord.py imports. Two traps around the mute: discord.py's own `@deprecated` APIs call `warnings.simplefilter('default')`, which outranks it, so using one brings aiohttp's warnings back (we use none today); and a `ClientHttpProxyError`'s `repr()` carries the `Proxy-Authorization` header, so log proxy errors with `str()`, never `%r`.
 
 ---
 
